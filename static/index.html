@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Релакс-фабрика</title>
+<style>
+  :root { --bg:#f6f4f1; --card:#fff; --text:#2b2a28; --muted:#7a766f; --accent:#6b5bd2; --line:#e6e1da; --ok:#2f8f5b; --err:#c0392b; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#1b1a19; --card:#252422; --text:#eeeae4; --muted:#a39e96; --accent:#9c8ff0; --line:#3a3835; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:16px/1.45 -apple-system, system-ui, sans-serif; }
+  main { max-width:760px; margin:0 auto; padding:24px 16px 60px; }
+  h1 { font-size:24px; margin:0 0 4px; } .sub { color:var(--muted); margin:0 0 20px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px; margin-bottom:18px; }
+  label { display:block; font-weight:600; margin:12px 0 6px; } .hint { font-weight:400; color:var(--muted); font-size:14px; }
+  input[type=file], select, input[type=number] { width:100%; padding:10px; border:1px solid var(--line); border-radius:10px; background:var(--bg); color:var(--text); font:inherit; }
+  .row { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; }
+  details { margin-top:14px; } summary { cursor:pointer; color:var(--accent); }
+  button { margin-top:18px; width:100%; padding:14px; border:0; border-radius:12px; background:var(--accent); color:#fff; font-family:inherit; font-size:17px; font-weight:600; cursor:pointer; }
+  button:disabled { opacity:.5; }
+  .job { border-top:1px solid var(--line); padding:12px 0; } .job:first-child { border-top:0; }
+  .bar { height:6px; background:var(--line); border-radius:3px; overflow:hidden; margin:6px 0; } .bar i { display:block; height:100%; background:var(--accent); }
+  .st-готово { color:var(--ok); } .st-ошибка { color:var(--err); } .muted { color:var(--muted); font-size:14px; }
+  a { color:var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Релакс-фабрика</h1>
+  <p class="sub">Картинка или клип + альбом треков → готовое длинное видео.</p>
+
+  <form class="card" id="f">
+    <label>Картинка или клип <span class="hint">PNG, JPG или MP4 (оживление из Kling, Seedance)</span></label>
+    <input type="file" name="visual" accept="image/*,video/*" required>
+    <label>Треки <span class="hint">MP3, можно выбрать сразу все 10</span></label>
+    <input type="file" name="tracks" accept="audio/*" multiple required>
+    <div class="row">
+      <div><label>Длина, часов</label><input type="number" name="hours" value="3" min="0.1" max="12" step="0.5"></div>
+      <div><label>Качество</label><select name="resolution"><option value="4k">4K</option><option value="1080p">1080p</option></select></div>
+      <div><label>Петля клипа</label><select name="loop_mode"><option value="crossfade">Плавная склейка</option><option value="pingpong">Вперёд-назад</option><option value="none">Без обработки</option></select></div>
+    </div>
+    <details>
+      <summary>Дополнительно</summary>
+      <div class="row">
+        <div><label>Кадров в секунду</label><select name="fps"><option>60</option><option>30</option></select></div>
+        <div><label>Скорость клипа</label><select name="speed"><option value="1">Обычная</option><option value="0.75">Медленнее</option><option value="0.5">В 2 раза медленнее</option></select></div>
+        <div><label>Переход между треками, сек</label><input type="number" name="track_crossfade" value="3" min="0" max="10" step="0.5"></div>
+        <div><label>Битрейт, Мбит/с</label><input type="number" name="bitrate" value="15" min="4" max="60"></div>
+        <div><label>Кодек</label><select name="codec"><option value="h264">H.264</option><option value="h265">H.265 (файл меньше)</option></select></div>
+        <div><label>Порядок треков</label><select name="shuffle"><option value="false">Как в альбоме</option><option value="true">Перемешивать</option></select></div>
+      </div>
+    </details>
+    <button id="go">Рендер</button>
+    <p class="muted" id="msg"></p>
+  </form>
+
+  <div class="card"><h2 style="margin:0 0 6px;font-size:18px">Очередь</h2><div id="jobs" class="muted">Пока пусто</div></div>
+</main>
+<script>
+const f = document.getElementById('f'), msg = document.getElementById('msg'), go = document.getElementById('go');
+f.addEventListener('submit', e => {
+  e.preventDefault();
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', 'jobs');
+  xhr.upload.onprogress = ev => { if (ev.lengthComputable) msg.textContent = 'Загружаю файлы: ' + Math.round(ev.loaded / ev.total * 100) + '%'; };
+  xhr.onload = () => { go.disabled = false; msg.textContent = xhr.status === 200 ? 'Добавлено в очередь' : 'Ошибка: ' + xhr.responseText; if (xhr.status === 200) f.reset(); load(); };
+  xhr.onerror = () => { go.disabled = false; msg.textContent = 'Не удалось отправить'; };
+  go.disabled = true; xhr.send(new FormData(f));
+});
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+async function del(id) { if (confirm('Удалить видео и файлы?')) { await fetch('jobs/' + id, {method:'DELETE'}); load(); } }
+async function load() {
+  const r = await fetch('jobs'); if (!r.ok) return;
+  const rows = await r.json(), box = document.getElementById('jobs');
+  if (!rows.length) { box.textContent = 'Пока пусто'; return; }
+  box.innerHTML = rows.map(j => `<div class="job">
+    <b>${esc(j.visual)}</b> · ${j.tracks} треков · ${j.settings.duration / 3600} ч
+    <div class="st-${esc(j.status)}">${esc(j.status)}${j.step && j.status !== 'готово' ? ': ' + esc(j.step) : ''}${j.seconds != null ? ' · ' + Math.round(j.seconds / 60) + ' мин' : ''}</div>
+    ${j.status === 'работает' ? `<div class="bar"><i style="width:${Math.round(j.progress * 100)}%"></i></div>` : ''}
+    ${j.file ? `<a href="jobs/${j.id}/video">Скачать</a> <span class="muted">${j.size_gb} ГБ</span> · ` : ''}
+    ${j.status !== 'работает' ? `<a href="#" onclick="del('${j.id}');return false">Удалить</a>` : ''}
+  </div>`).join('');
+}
+load(); setInterval(load, 4000);
+</script>
+</body>
+</html>
