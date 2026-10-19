@@ -25,6 +25,10 @@ fi
 
 mkdir -p /var/lib/relax-factory
 docker compose up -d --build
+git -C .. rev-parse --short HEAD > /var/lib/relax-factory/version
+
+# pick up new versions from GitHub automatically (only this app is touched)
+echo "*/5 * * * * root $(pwd)/autoupdate.sh >> /var/log/relax-factory-update.log 2>&1" > /etc/cron.d/relax-factory
 
 set -a; . ./.env; set +a
 echo

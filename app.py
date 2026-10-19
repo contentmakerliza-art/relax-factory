@@ -24,6 +24,7 @@ from render.engine import Job, RenderSettings, render
 DATA = Path(os.environ.get("APP_DATA", Path(__file__).parent / "data"))
 PASSWORD = os.environ.get("APP_PASSWORD", "")
 DATA.mkdir(parents=True, exist_ok=True)
+(DATA / "busy").unlink(missing_ok=True)  # left over from a restart mid-render
 
 app = FastAPI(title="Релакс-фабрика")
 security = HTTPBasic()
@@ -43,6 +44,8 @@ def worker() -> None:
         info = jobs[job_id]
         info["status"] = "работает"
         started = time.time()
+        busy = DATA / "busy"  # auto-update waits while this file exists
+        busy.touch()
 
         def progress(msg: str, frac: float) -> None:
             info["step"], info["progress"] = msg, frac
@@ -53,6 +56,8 @@ def worker() -> None:
         except Exception as exc:  # shown to the user on the page
             info["status"], info["step"] = "ошибка", str(exc)[-500:]
         info["seconds"] = round(time.time() - started)
+        if work.empty():
+            busy.unlink(missing_ok=True)
 
 
 threading.Thread(target=worker, daemon=True).start()
@@ -165,6 +170,13 @@ def delete(job_id: str):
     shutil.rmtree(DATA / job_id, ignore_errors=True)
     jobs.pop(job_id)
     return {"ok": True}
+
+
+@app.get("/version")
+def version():
+    """Public: which commit is deployed (written by deploy/autoupdate.sh)."""
+    f = DATA / "version"
+    return {"version": f.read_text().strip() if f.exists() else "unknown"}
 
 
 @app.get("/", response_class=HTMLResponse, dependencies=[Depends(check)])
