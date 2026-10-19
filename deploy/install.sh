@@ -12,6 +12,12 @@ ENV_FILE=/etc/relax-factory.env
 apt-get update -qq
 apt-get install -y -qq ffmpeg git python3-venv curl debian-keyring debian-archive-keyring apt-transport-https >/dev/null
 
+# small servers: add 4 GB swap so a 4K render cannot run out of memory
+if ! swapon --show | grep -q . && [ ! -f /swapfile ]; then
+  fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile >/dev/null && swapon /swapfile
+  echo '/swapfile none swap sw 0 0' >> /etc/fstab
+fi
+
 id relax >/dev/null 2>&1 || useradd --system --home "$DATA_DIR" --shell /usr/sbin/nologin relax
 mkdir -p "$DATA_DIR" && chown relax:relax "$DATA_DIR"
 

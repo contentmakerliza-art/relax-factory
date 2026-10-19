@@ -122,9 +122,9 @@ def _crossfade_loop(clip: Path, dst: Path, d: float, s: RenderSettings) -> None:
 
 
 def _pingpong_loop(clip: Path, dst: Path, d: float, s: RenderSettings, tmp: Path) -> None:
-    """Forward then backward. Reversing is done in 2-second chunks so a 4K clip
+    """Forward then backward. Reversing is done in 1-second chunks so a 4K clip
     never has to sit in memory as a whole."""
-    chunk = 2.0
+    chunk = 1.0
     n = math.ceil(d / chunk)
     rev_parts = []
     for i in range(n):
