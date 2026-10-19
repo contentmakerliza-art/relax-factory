@@ -35,7 +35,7 @@
     <label>Треки <span class="hint">MP3, можно выбрать сразу все 10</span></label>
     <input type="file" name="tracks" accept="audio/*" multiple required>
     <div class="row">
-      <div><label>Длина, часов</label><input type="number" name="hours" value="3" min="0.1" max="12" step="0.5"></div>
+      <div><label>Длина, часов</label><input type="number" name="hours" value="3" min="0.1" max="12" step="any"></div>
       <div><label>Качество</label><select name="resolution"><option value="4k">4K</option><option value="1080p">1080p</option></select></div>
       <div><label>Петля клипа</label><select name="loop_mode"><option value="crossfade">Плавная склейка</option><option value="pingpong">Вперёд-назад</option><option value="none">Без обработки</option></select></div>
     </div>
@@ -58,14 +58,38 @@
 </main>
 <script>
 const f = document.getElementById('f'), msg = document.getElementById('msg'), go = document.getElementById('go');
-f.addEventListener('submit', e => {
+const CHUNK = 16 * 1024 * 1024;
+async function call(url, opts) {
+  const r = await fetch(url, opts);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+f.addEventListener('submit', async e => {
   e.preventDefault();
-  const xhr = new XMLHttpRequest();
-  xhr.open('POST', 'jobs');
-  xhr.upload.onprogress = ev => { if (ev.lengthComputable) msg.textContent = 'Загружаю файлы: ' + Math.round(ev.loaded / ev.total * 100) + '%'; };
-  xhr.onload = () => { go.disabled = false; msg.textContent = xhr.status === 200 ? 'Добавлено в очередь' : 'Ошибка: ' + xhr.responseText; if (xhr.status === 200) f.reset(); load(); };
-  xhr.onerror = () => { go.disabled = false; msg.textContent = 'Не удалось отправить'; };
-  go.disabled = true; xhr.send(new FormData(f));
+  const visual = f.visual.files, tracks = f.tracks.files;
+  const files = [...[...visual].map(x => ['visual', x]), ...[...tracks].map(x => ['tracks', x])];
+  const total = files.reduce((n, [, x]) => n + x.size, 0);
+  let sent = 0;
+  go.disabled = true;
+  try {
+    const { id } = await call('jobs/new', { method: 'POST' });
+    for (const [kind, file] of files) {
+      for (let off = 0; off < file.size || off === 0; off += CHUNK) {
+        const part = file.slice(off, off + CHUNK);
+        await call(`jobs/${id}/files/${kind}/${encodeURIComponent(file.name)}?offset=${off}`, { method: 'PUT', body: part });
+        sent += part.size;
+        msg.textContent = 'Загружаю файлы: ' + Math.round(sent / total * 100) + '%';
+        if (file.size === 0) break;
+      }
+    }
+    const form = new FormData(f);
+    form.delete('visual'); form.delete('tracks');
+    await call(`jobs/${id}/start`, { method: 'POST', body: form });
+    msg.textContent = 'Добавлено в очередь'; f.reset();
+  } catch (err) {
+    msg.textContent = 'Ошибка: ' + err.message;
+  }
+  go.disabled = false; load();
 });
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 async function del(id) { if (confirm('Удалить видео и файлы?')) { await fetch('jobs/' + id, {method:'DELETE'}); load(); } }

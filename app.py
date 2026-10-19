@@ -15,7 +15,7 @@ import uuid
 from dataclasses import asdict
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
@@ -58,18 +58,47 @@ def worker() -> None:
 threading.Thread(target=worker, daemon=True).start()
 
 
-def _save(upload: UploadFile, folder: Path) -> Path:
-    name = Path(upload.filename or "file").name
-    dst = folder / name
-    with dst.open("wb") as f:
-        shutil.copyfileobj(upload.file, f)
-    return dst
+CHUNK_LIMIT = 64 * 1024 * 1024
+KINDS = {"visual", "tracks"}
 
 
-@app.post("/jobs", dependencies=[Depends(check)])
-def create_job(
-    visual: UploadFile = File(...),
-    tracks: list[UploadFile] = File(...),
+def _job_dir(job_id: str) -> Path:
+    folder = (DATA / job_id).resolve()
+    if folder.parent != DATA.resolve() or not folder.is_dir():
+        raise HTTPException(404, "Нет такого задания")
+    return folder
+
+
+@app.post("/jobs/new", dependencies=[Depends(check)])
+def new_job():
+    """Files are sent in small pieces (a proxy in front may cut long requests)."""
+    job_id = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
+    for kind in KINDS:
+        (DATA / job_id / kind).mkdir(parents=True)
+    return {"id": job_id}
+
+
+@app.put("/jobs/{job_id}/files/{kind}/{name}", dependencies=[Depends(check)])
+async def upload_chunk(job_id: str, kind: str, name: str, request: Request, offset: int = 0):
+    if kind not in KINDS or job_id in jobs:
+        raise HTTPException(400, "Нельзя загрузить")
+    dst = _job_dir(job_id) / kind / Path(name).name
+    size = dst.stat().st_size if dst.exists() else 0
+    if offset != size:
+        raise HTTPException(409, f"Ожидалось смещение {size}")
+    received = 0
+    with dst.open("ab") as f:
+        async for piece in request.stream():
+            received += len(piece)
+            if received > CHUNK_LIMIT:
+                raise HTTPException(413, "Слишком большой кусок")
+            f.write(piece)
+    return {"size": size + received}
+
+
+@app.post("/jobs/{job_id}/start", dependencies=[Depends(check)])
+def start_job(
+    job_id: str,
     hours: float = Form(3.0),
     resolution: str = Form("4k"),
     fps: int = Form(60),
@@ -82,11 +111,14 @@ def create_job(
 ):
     if not 0 < hours <= 12:
         raise HTTPException(400, "Длина от 0 до 12 часов")
-    job_id = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
-    folder = DATA / job_id
-    (folder / "tracks").mkdir(parents=True)
-    vis = _save(visual, folder)
-    trk = sorted(_save(t, folder / "tracks") for t in tracks)
+    if job_id in jobs:
+        raise HTTPException(400, "Задание уже запущено")
+    folder = _job_dir(job_id)
+    visuals = sorted((folder / "visual").iterdir())
+    trk = sorted((folder / "tracks").iterdir())
+    if len(visuals) != 1 or not trk:
+        raise HTTPException(400, "Нужны одна картинка или клип и хотя бы один трек")
+    vis = visuals[0]
     w, h = (3840, 2160) if resolution == "4k" else (1920, 1080)
     settings = RenderSettings(
         width=w, height=h, fps=fps, duration=hours * 3600, loop_mode=loop_mode,

@@ -1,0 +1,28 @@
+# Runs next to an existing Traefik (the one in front of n8n) and uses its
+# HTTPS certificates. Settings come from deploy/.env (created by install.sh).
+services:
+  relax:
+    build: ..
+    container_name: relax-factory
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - /var/lib/relax-factory:/data
+    # leave room for the other services on a small server
+    cpus: 1.5
+    mem_limit: 1g
+    memswap_limit: 3g
+    networks: [proxy]
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=${PROXY_NETWORK}
+      - traefik.http.routers.relax.rule=Host(`${RELAX_HOST}`)
+      - traefik.http.routers.relax.entrypoints=websecure
+      - traefik.http.routers.relax.tls=true
+      - traefik.http.routers.relax.tls.certresolver=${CERT_RESOLVER}
+      - traefik.http.services.relax.loadbalancer.server.port=8000
+
+networks:
+  proxy:
+    name: ${PROXY_NETWORK}
+    external: true
