@@ -191,6 +191,24 @@ def _join_clips(clips: list[Path], dst: Path, s: RenderSettings, tmp: Path) -> f
     return probe_duration(dst)
 
 
+def _best_loop_point(clip: Path, d: float, s: RenderSettings) -> float:
+    """Time in the second half of `clip` whose frame looks most like the first
+    frame: cutting there and blending back to the start hides the loop seam."""
+    w, h = 48, 27
+    raw = subprocess.run(
+        ["ffmpeg", "-v", "error", "-i", str(clip), "-vf", f"scale={w}:{h},format=gray",
+         "-f", "rawvideo", "-"], capture_output=True, check=True).stdout
+    n = w * h
+    frames = [raw[i:i + n] for i in range(0, len(raw) - n + 1, n)]
+    if len(frames) < 4:
+        return d
+    first = frames[0]
+    start = len(frames) // 2
+    best = min(range(start, len(frames)),
+               key=lambda k: sum(abs(a - b) for a, b in zip(frames[k], first)))
+    return min(d, best / s.fps)
+
+
 def build_loop_segment(visuals: list[Path], dst: Path, s: RenderSettings, tmp: Path) -> float:
     if len(visuals) == 1 and visuals[0].suffix.lower() in IMAGE_EXTS:
         _image_segment(visuals[0], dst, s)
@@ -214,6 +232,13 @@ def build_loop_segment(visuals: list[Path], dst: Path, s: RenderSettings, tmp: P
         d = _normalized_clip(visuals[0], clip, s)
     else:
         d = _join_clips(visuals, clip, s, tmp)
+    if s.loop_mode == "chain" and len(visuals) > 1:
+        cut = _best_loop_point(clip, d, s)
+        if cut < d - 0.1:
+            cut_clip = tmp / "clip_cut.mp4"
+            _run(["ffmpeg", "-y", "-i", str(clip), "-t", f"{cut:.4f}", "-an",
+                  *_work_codec_args(s), str(cut_clip)])
+            clip, d = cut_clip, probe_duration(cut_clip)
     if s.loop_mode in ("crossfade", "chain"):
         _crossfade_loop(clip, dst, d, s)
     elif s.loop_mode in ("pingpong", "chain_pingpong"):
