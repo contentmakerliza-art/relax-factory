@@ -58,7 +58,7 @@
 </main>
 <script>
 const f = document.getElementById('f'), msg = document.getElementById('msg'), go = document.getElementById('go');
-const CHUNK = 16 * 1024 * 1024;
+const CHUNK = 4 * 1024 * 1024;  // small pieces: the proxy cuts requests longer than about a minute
 async function call(url, opts) {
   const r = await fetch(url, opts);
   if (!r.ok) throw new Error(await r.text());
@@ -76,7 +76,15 @@ f.addEventListener('submit', async e => {
     for (const [kind, file] of files) {
       for (let off = 0; off < file.size || off === 0; off += CHUNK) {
         const part = file.slice(off, off + CHUNK);
-        await call(`jobs/${id}/files/${kind}/${encodeURIComponent(file.name)}?offset=${off}`, { method: 'PUT', body: part });
+        const url = `jobs/${id}/files/${kind}/${encodeURIComponent(file.name)}?offset=${off}`;
+        for (let attempt = 1; ; attempt++) {
+          try { await call(url, { method: 'PUT', body: part }); break; }
+          catch (err) {
+            if (attempt >= 5) throw err;
+            msg.textContent = 'Связь прервалась, повторяю…';
+            await new Promise(r => setTimeout(r, 3000 * attempt));
+          }
+        }
         sent += part.size;
         msg.textContent = 'Загружаю файлы: ' + Math.round(sent / total * 100) + '%';
         if (file.size === 0) break;
