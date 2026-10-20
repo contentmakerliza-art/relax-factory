@@ -182,6 +182,21 @@ def build_loop_segment(visuals: list[Path], dst: Path, s: RenderSettings, tmp: P
     if any(v.suffix.lower() in IMAGE_EXTS for v in visuals):
         raise ValueError("Картинку можно загрузить только одну, без клипов")
     clip = tmp / "clip_norm.mp4"
+    if len(visuals) > 1 and s.loop_mode == "pingpong":
+        # each clip forward then back, so every clip ends on its own first
+        # frame; clips made from the same picture then join without a seam
+        parts = []
+        for i, v in enumerate(visuals):
+            norm, pp = tmp / f"pp_src_{i:02d}.mp4", tmp / f"pp_{i:02d}.mp4"
+            d = _normalized_clip(v, norm, s)
+            sub = tmp / f"pp_tmp_{i:02d}"
+            sub.mkdir()
+            _pingpong_loop(norm, pp, d, s, sub)
+            parts.append(pp)
+        lst = tmp / "pp_parts.txt"
+        lst.write_text("".join(f"file '{p}'\n" for p in parts))
+        _run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", str(dst)])
+        return probe_duration(dst)
     if len(visuals) == 1:
         d = _normalized_clip(visuals[0], clip, s)
     else:
