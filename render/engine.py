@@ -54,7 +54,10 @@ Progress = Callable[[str, float], None]
 def _run(cmd: list[str]) -> str:
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
-        tail = "\n".join(proc.stderr.splitlines()[-20:])
+        lines = proc.stderr.splitlines()
+        # the cause is usually the first error line, not the last ones
+        first = next((l for l in lines if "rror" in l or "nvalid" in l), "")
+        tail = "\n".join(([first] if first and first not in lines[-12:] else []) + lines[-12:])
         raise RuntimeError(f"ffmpeg failed: {' '.join(cmd[:6])} ...\n{tail}")
     return proc.stderr
 
@@ -113,8 +116,10 @@ def _crossfade_loop(clip: Path, dst: Path, d: float, s: RenderSettings) -> None:
     of the result is followed seamlessly by its first frame."""
     x = min(s.loop_crossfade, d / 3)
     flt = (
-        f"[0:v]trim=start={x},setpts=PTS-STARTPTS[main];"
-        f"[0:v]trim=end={x},setpts=PTS-STARTPTS[head];"
+        # fps= after trim: ffmpeg 7 drops the frame rate there and xfade
+        # refuses inputs without a constant one
+        f"[0:v]trim=start={x},setpts=PTS-STARTPTS,fps={s.fps}[main];"
+        f"[0:v]trim=end={x},setpts=PTS-STARTPTS,fps={s.fps}[head];"
         f"[main][head]xfade=transition=fade:duration={x}:offset={d - 2 * x:.4f},format=yuv420p[v]"
     )
     _run(["ffmpeg", "-y", "-i", str(clip), "-filter_complex", flt, "-map", "[v]",
