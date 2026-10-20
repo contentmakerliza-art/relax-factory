@@ -133,7 +133,7 @@ def _encode_list(files: list[Path], dst: Path, s: RenderSettings, tmp: Path) -> 
 def _crossfade_loop(clip: Path, dst: Path, d: float, s: RenderSettings) -> None:
     """Move the first `x` seconds to the end and blend them in: the last frame
     of the result is followed seamlessly by its first frame."""
-    x = min(s.loop_crossfade, d / 3)
+    x = min(s.loop_crossfade, d / 2.5)
     flt = (
         # fps= after trim: ffmpeg 7 drops the frame rate there and xfade
         # refuses inputs without a constant one
@@ -172,7 +172,7 @@ def _join_clips(clips: list[Path], dst: Path, s: RenderSettings, tmp: Path) -> f
         lst.write_text("".join(f"file '{n}'\n" for n, _ in parts))
         _run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", str(dst)])
         return probe_duration(dst)
-    x = min([s.loop_crossfade] + [d / 3 for _, d in parts])
+    x = min([s.loop_crossfade] + [d / 2.5 for _, d in parts])
     inputs, steps, prev, offset = [], [], "[0:v]", 0.0
     for k, (n, d) in enumerate(parts):
         inputs += ["-i", str(n)]

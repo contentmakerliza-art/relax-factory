@@ -47,6 +47,7 @@
       <div class="row">
         <div><label>Кадров в секунду</label><select name="fps"><option>60</option><option>30</option></select></div>
         <div><label>Скорость клипа</label><select name="speed"><option value="1">Обычная</option><option value="0.75">Медленнее</option><option value="0.5">В 2 раза медленнее</option></select></div>
+        <div><label>Переход между клипами, сек <span class="hint">для «Плавной склейки», до 3</span></label><input type="number" name="loop_crossfade" value="1.5" min="0.5" max="4" step="0.5"></div>
         <div><label>Переход между треками, сек</label><input type="number" name="track_crossfade" value="3" min="0" max="10" step="0.5"></div>
         <div><label>Битрейт, Мбит/с</label><input type="number" name="bitrate" value="15" min="4" max="60"></div>
         <div><label>Кодек</label><select name="codec"><option value="h264">H.264</option><option value="h265">H.265 (файл меньше)</option></select></div>
