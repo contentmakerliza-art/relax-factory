@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import queue
+import random
 import secrets
 import shutil
 import threading
@@ -19,6 +20,7 @@ from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
+from render.drive import fetch_folder
 from render.engine import Job, RenderSettings, render
 
 DATA = Path(os.environ.get("APP_DATA", Path(__file__).parent / "data"))
@@ -51,6 +53,8 @@ def worker() -> None:
             info["step"], info["progress"] = msg, frac
 
         try:
+            if info.get("drive"):
+                _fetch_from_drive(info, progress)
             render(info["job"], progress)
             info["status"] = "готово"
         except Exception as exc:  # shown to the user on the page
@@ -58,6 +62,25 @@ def worker() -> None:
         info["seconds"] = round(time.time() - started)
         if work.empty():
             busy.unlink(missing_ok=True)
+
+
+VISUAL_EXTS = {".mp4", ".mov", ".webm", ".mkv", ".png", ".jpg", ".jpeg", ".webp"}
+AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"}
+
+
+def _fetch_from_drive(info: dict, progress) -> None:
+    """Download the clips and tracks from Google Drive links straight to the server."""
+    job: Job = info["job"]
+    folder = job.output.parent
+    visual_url, tracks_url, pick = info["drive"]
+    if visual_url:
+        progress("Скачиваю клипы с Google Диска", 0.0)
+        job.visuals = fetch_folder(visual_url, folder / "visual", VISUAL_EXTS)
+    if tracks_url:
+        progress("Скачиваю треки с Google Диска", 0.0)
+        job.tracks = fetch_folder(tracks_url, folder / "tracks", AUDIO_EXTS)
+    if pick and len(job.tracks) > pick:
+        job.tracks = sorted(random.sample(job.tracks, pick))
 
 
 threading.Thread(target=worker, daemon=True).start()
@@ -117,26 +140,33 @@ def start_job(
     shuffle: bool = Form(False),
     codec: str = Form("h264"),
     bitrate: int = Form(15),
+    visual_url: str = Form(""),
+    tracks_url: str = Form(""),
+    tracks_pick: int = Form(0),
 ):
     if not 0 < hours <= 12:
         raise HTTPException(400, "Длина от 0 до 12 часов")
     if job_id in jobs:
         raise HTTPException(400, "Задание уже запущено")
     folder = _job_dir(job_id)
-    visuals = sorted((folder / "visual").iterdir())
-    trk = sorted((folder / "tracks").iterdir())
-    if not visuals or not trk:
-        raise HTTPException(400, "Нужны картинка или клипы и хотя бы один трек")
-    vis = visuals[0]
+    visual_url, tracks_url = visual_url.strip(), tracks_url.strip()
+    visuals = [] if visual_url else sorted((folder / "visual").iterdir())
+    trk = [] if tracks_url else sorted((folder / "tracks").iterdir())
+    if not (visuals or visual_url) or not (trk or tracks_url):
+        raise HTTPException(400, "Нужны картинка или клипы и хотя бы один трек (файлы или ссылка на Google Диск)")
+    if not tracks_url and tracks_pick and len(trk) > tracks_pick:
+        trk = sorted(random.sample(trk, tracks_pick))
+    name = visuals[0].stem if visuals else "video"
     w, h = (3840, 2160) if resolution == "4k" else (1920, 1080)
     settings = RenderSettings(
         width=w, height=h, fps=fps, duration=hours * 3600, loop_mode=loop_mode,
         speed=speed, track_crossfade=track_crossfade, shuffle_tracks=shuffle,
         codec=codec, video_bitrate=f"{bitrate}M",
     )
-    out = folder / f"{vis.stem}_{hours:g}h.mp4"
+    out = folder / f"{name}_{hours:g}h.mp4"
     jobs[job_id] = {"job": Job(visuals, trk, out, settings), "status": "в очереди",
-                    "step": "", "progress": 0.0, "created": time.time()}
+                    "step": "", "progress": 0.0, "created": time.time(),
+                    "drive": (visual_url, tracks_url, tracks_pick) if visual_url or tracks_url else None}
     work.put(job_id)
     return {"id": job_id}
 
@@ -149,7 +179,8 @@ def list_jobs():
         rows.append({
             "id": job_id, "status": info["status"], "step": info["step"],
             "progress": info["progress"], "seconds": info.get("seconds"),
-            "visual": job.visuals[0].name + (f" + ещё {len(job.visuals) - 1}" if len(job.visuals) > 1 else ""),
+            "visual": (job.visuals[0].name + (f" + ещё {len(job.visuals) - 1}" if len(job.visuals) > 1 else ""))
+                      if job.visuals else "клипы с Google Диска",
             "tracks": len(job.tracks),
             "file": job.output.name if info["status"] == "готово" else None,
             "size_gb": round(job.output.stat().st_size / 1e9, 2) if job.output.exists() and info["status"] == "готово" else None,
