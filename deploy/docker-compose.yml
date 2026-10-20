@@ -9,9 +9,10 @@ services:
     volumes:
       - /var/lib/relax-factory:/data
     # leave room for the other services on a small server
-    cpus: 1.5
-    mem_limit: 1g
-    memswap_limit: 3g
+    # set by autoupdate.sh from the server size (2 cores: 1.5; 4 cores: 3)
+    cpus: ${RELAX_CPUS:-1.5}
+    mem_limit: ${RELAX_MEM:-1g}
+    memswap_limit: ${RELAX_SWAP:-3g}
     networks: [proxy]
     labels:
       - traefik.enable=true
