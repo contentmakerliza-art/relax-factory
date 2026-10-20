@@ -93,11 +93,15 @@ async def upload_chunk(job_id: str, kind: str, name: str, request: Request, offs
         raise HTTPException(409, f"Ожидалось смещение {size}")
     received = 0
     with dst.open("ab") as f:
-        async for piece in request.stream():
-            received += len(piece)
-            if received > CHUNK_LIMIT:
-                raise HTTPException(413, "Слишком большой кусок")
-            f.write(piece)
+        try:
+            async for piece in request.stream():
+                received += len(piece)
+                if received > CHUNK_LIMIT:
+                    raise HTTPException(413, "Слишком большой кусок")
+                f.write(piece)
+        except BaseException:
+            f.truncate(size)  # drop a half-received piece so the browser can send it again
+            raise
     return {"size": size + received}
 
 
