@@ -25,7 +25,7 @@ class RenderSettings:
     height: int = 2160
     fps: int = 60
     duration: float = 3 * 3600          # final video length, seconds
-    loop_mode: str = "crossfade"        # crossfade | chain | pingpong | none (clips only)
+    loop_mode: str = "crossfade"        # crossfade | chain | chain_pingpong | pingpong | none (clips only)
     loop_crossfade: float = 1.5         # seconds of blend at the loop seam
     speed: float = 1.0                  # 0.5 = twice slower (after a 60 fps upscale)
     saturation: float = 1.0
@@ -170,7 +170,7 @@ def _join_clips(clips: list[Path], dst: Path, s: RenderSettings, tmp: Path) -> f
     parts = []
     for i, c in enumerate(clips):
         n = tmp / f"part_{i:02d}.mp4"
-        parts.append((n, _normalized_clip(c, n, s, skip_first=i > 0 and s.loop_mode == "chain")))
+        parts.append((n, _normalized_clip(c, n, s, skip_first=i > 0 and s.loop_mode.startswith("chain"))))
     if s.loop_mode != "crossfade":
         lst = tmp / "parts.txt"
         lst.write_text("".join(f"file '{n}'\n" for n, _ in parts))
@@ -216,7 +216,8 @@ def build_loop_segment(visuals: list[Path], dst: Path, s: RenderSettings, tmp: P
         d = _join_clips(visuals, clip, s, tmp)
     if s.loop_mode in ("crossfade", "chain"):
         _crossfade_loop(clip, dst, d, s)
-    elif s.loop_mode == "pingpong":
+    elif s.loop_mode in ("pingpong", "chain_pingpong"):
+        # chain_pingpong: the whole chain forward, then the whole chain backward
         _encode_list(_pingpong_parts(clip, d, s, tmp), dst, s, tmp)
     else:
         _encode_list([clip], dst, s, tmp)
