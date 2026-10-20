@@ -27,6 +27,7 @@ class RenderSettings:
     duration: float = 3 * 3600          # final video length, seconds
     loop_mode: str = "crossfade"        # crossfade | chain | chain_pingpong | pingpong | none (clips only)
     loop_crossfade: float = 1.5         # seconds of blend at the loop seam
+    find_loop_point: bool = False       # chain: cut where the frame is most like the first
     speed: float = 1.0                  # 0.5 = twice slower (after a 60 fps upscale)
     saturation: float = 1.0
     image_segment: float = 10.0         # length of the still-image segment
@@ -232,7 +233,7 @@ def build_loop_segment(visuals: list[Path], dst: Path, s: RenderSettings, tmp: P
         d = _normalized_clip(visuals[0], clip, s)
     else:
         d = _join_clips(visuals, clip, s, tmp)
-    if s.loop_mode == "chain" and len(visuals) > 1:
+    if s.loop_mode == "chain" and s.find_loop_point and len(visuals) > 1:
         cut = _best_loop_point(clip, d, s)
         if cut < d - 0.1:
             cut_clip = tmp / "clip_cut.mp4"

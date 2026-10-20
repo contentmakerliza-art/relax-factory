@@ -142,6 +142,7 @@ def start_job(
     speed: float = Form(1.0),
     track_crossfade: float = Form(3.0),
     loop_crossfade: float = Form(1.5),
+    find_loop_point: bool = Form(False),
     shuffle: bool = Form(False),
     codec: str = Form("h264"),
     bitrate: int = Form(15),
@@ -165,7 +166,7 @@ def start_job(
     w, h = (3840, 2160) if resolution == "4k" else (1920, 1080)
     settings = RenderSettings(
         width=w, height=h, fps=fps, duration=hours * 3600, loop_mode=loop_mode,
-        speed=speed, loop_crossfade=loop_crossfade, track_crossfade=track_crossfade, shuffle_tracks=shuffle,
+        speed=speed, loop_crossfade=loop_crossfade, find_loop_point=find_loop_point, track_crossfade=track_crossfade, shuffle_tracks=shuffle,
         codec=codec, video_bitrate=f"{bitrate}M",
     )
     out = folder / f"{name}_{hours:g}h.mp4"
