@@ -64,7 +64,8 @@ def worker() -> None:
             busy.unlink(missing_ok=True)
 
 
-VISUAL_EXTS = {".mp4", ".mov", ".webm", ".mkv", ".png", ".jpg", ".jpeg", ".webp"}
+VIDEO_EXTS = {".mp4", ".mov", ".webm", ".mkv"}
+VISUAL_EXTS = VIDEO_EXTS | {".png", ".jpg", ".jpeg", ".webp"}
 AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"}
 
 
@@ -75,7 +76,10 @@ def _fetch_from_drive(info: dict, progress) -> None:
     visual_url, tracks_url, pick = info["drive"]
     if visual_url:
         progress("Скачиваю клипы с Google Диска", 0.0)
-        job.visuals = fetch_folder(visual_url, folder / "visual", VISUAL_EXTS)
+        found = fetch_folder(visual_url, folder / "visual", VISUAL_EXTS)
+        # a folder with clips may also hold the frames they were made from
+        clips = [p for p in found if p.suffix.lower() in VIDEO_EXTS]
+        job.visuals = clips or found
     if tracks_url:
         progress("Скачиваю треки с Google Диска", 0.0)
         job.tracks = fetch_folder(tracks_url, folder / "tracks", AUDIO_EXTS)
