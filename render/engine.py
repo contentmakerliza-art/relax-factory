@@ -42,7 +42,7 @@ class RenderSettings:
 
 @dataclass
 class Job:
-    visual: Path
+    visuals: list[Path]                 # one picture, or one or more clips
     tracks: list[Path]
     output: Path
     settings: RenderSettings = field(default_factory=RenderSettings)
@@ -147,12 +147,45 @@ def _pingpong_loop(clip: Path, dst: Path, d: float, s: RenderSettings, tmp: Path
     _run(["ffmpeg", "-y", "-i", str(joined), "-an", *_video_codec_args(s), str(dst)])
 
 
-def build_loop_segment(visual: Path, dst: Path, s: RenderSettings, tmp: Path) -> float:
-    if visual.suffix.lower() in IMAGE_EXTS:
-        _image_segment(visual, dst, s)
+def _join_clips(clips: list[Path], dst: Path, s: RenderSettings, tmp: Path) -> float:
+    """Several clips one after another. Clips that start and end on the same
+    frame join without a seam by plain concatenation; with "crossfade" each
+    joint is also blended, which hides joints between clips that don't match."""
+    parts = []
+    for i, c in enumerate(clips):
+        n = tmp / f"part_{i:02d}.mp4"
+        parts.append((n, _normalized_clip(c, n, s)))
+    if s.loop_mode != "crossfade":
+        lst = tmp / "parts.txt"
+        lst.write_text("".join(f"file '{n}'\n" for n, _ in parts))
+        _run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", str(dst)])
         return probe_duration(dst)
+    x = min([s.loop_crossfade] + [d / 3 for _, d in parts])
+    inputs, steps, prev, offset = [], [], "[0:v]", 0.0
+    for k, (n, d) in enumerate(parts):
+        inputs += ["-i", str(n)]
+        if k:
+            offset += parts[k - 1][1] - x
+            steps.append(f"{prev}[{k}:v]xfade=transition=fade:duration={x}:offset={offset:.4f}[j{k}]")
+            prev = f"[j{k}]"
+    script = tmp / "join_filter.txt"
+    script.write_text(";".join(steps) + f";{prev}format=yuv420p[v]")
+    _run(["ffmpeg", "-y", *inputs, "-filter_complex_script", str(script), "-map", "[v]",
+          "-an", *_video_codec_args(s), str(dst)])
+    return probe_duration(dst)
+
+
+def build_loop_segment(visuals: list[Path], dst: Path, s: RenderSettings, tmp: Path) -> float:
+    if len(visuals) == 1 and visuals[0].suffix.lower() in IMAGE_EXTS:
+        _image_segment(visuals[0], dst, s)
+        return probe_duration(dst)
+    if any(v.suffix.lower() in IMAGE_EXTS for v in visuals):
+        raise ValueError("Картинку можно загрузить только одну, без клипов")
     clip = tmp / "clip_norm.mp4"
-    d = _normalized_clip(visual, clip, s)
+    if len(visuals) == 1:
+        d = _normalized_clip(visuals[0], clip, s)
+    else:
+        d = _join_clips(visuals, clip, s, tmp)
     if s.loop_mode == "crossfade":
         _crossfade_loop(clip, dst, d, s)
     elif s.loop_mode == "pingpong":
@@ -296,7 +329,7 @@ def render(job: Job, progress: Progress | None = None) -> Path:
         tmp = Path(td)
         say("Готовлю петлю видео", 0.05)
         seg = tmp / "loop.mp4"
-        seg_len = build_loop_segment(job.visual, seg, s, tmp)
+        seg_len = build_loop_segment(job.visuals, seg, s, tmp)
 
         say("Собираю и выравниваю музыку", 0.35)
         audio = tmp / "audio.m4a"

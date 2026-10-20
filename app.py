@@ -121,8 +121,8 @@ def start_job(
     folder = _job_dir(job_id)
     visuals = sorted((folder / "visual").iterdir())
     trk = sorted((folder / "tracks").iterdir())
-    if len(visuals) != 1 or not trk:
-        raise HTTPException(400, "Нужны одна картинка или клип и хотя бы один трек")
+    if not visuals or not trk:
+        raise HTTPException(400, "Нужны картинка или клипы и хотя бы один трек")
     vis = visuals[0]
     w, h = (3840, 2160) if resolution == "4k" else (1920, 1080)
     settings = RenderSettings(
@@ -131,7 +131,7 @@ def start_job(
         codec=codec, video_bitrate=f"{bitrate}M",
     )
     out = folder / f"{vis.stem}_{hours:g}h.mp4"
-    jobs[job_id] = {"job": Job(vis, trk, out, settings), "status": "в очереди",
+    jobs[job_id] = {"job": Job(visuals, trk, out, settings), "status": "в очереди",
                     "step": "", "progress": 0.0, "created": time.time()}
     work.put(job_id)
     return {"id": job_id}
@@ -145,7 +145,8 @@ def list_jobs():
         rows.append({
             "id": job_id, "status": info["status"], "step": info["step"],
             "progress": info["progress"], "seconds": info.get("seconds"),
-            "visual": job.visual.name, "tracks": len(job.tracks),
+            "visual": job.visuals[0].name + (f" + ещё {len(job.visuals) - 1}" if len(job.visuals) > 1 else ""),
+            "tracks": len(job.tracks),
             "file": job.output.name if info["status"] == "готово" else None,
             "size_gb": round(job.output.stat().st_size / 1e9, 2) if job.output.exists() and info["status"] == "готово" else None,
             "settings": asdict(job.settings),
@@ -154,12 +155,14 @@ def list_jobs():
 
 
 @app.get("/jobs/{job_id}/video", dependencies=[Depends(check)])
-def download(job_id: str):
+def download(job_id: str, watch: bool = False):
+    """watch=1 opens the video in the browser instead of downloading it."""
     info = jobs.get(job_id)
     if not info or info["status"] != "готово":
         raise HTTPException(404)
     out: Path = info["job"].output
-    return FileResponse(out, filename=out.name, media_type="video/mp4")
+    return FileResponse(out, filename=out.name, media_type="video/mp4",
+                        content_disposition_type="inline" if watch else "attachment")
 
 
 @app.delete("/jobs/{job_id}", dependencies=[Depends(check)])

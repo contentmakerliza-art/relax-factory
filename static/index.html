@@ -30,8 +30,8 @@
   <p class="sub">Картинка или клип + альбом треков → готовое длинное видео.</p>
 
   <form class="card" id="f">
-    <label>Картинка или клип <span class="hint">PNG, JPG или MP4 (оживление из Kling, Seedance)</span></label>
-    <input type="file" name="visual" accept="image/*,video/*" required>
+    <label>Картинка или клипы <span class="hint">одна картинка PNG/JPG или один-несколько клипов MP4 (идут по очереди)</span></label>
+    <input type="file" name="visual" accept="image/*,video/*" multiple required>
     <label>Треки <span class="hint">MP3, можно выбрать сразу все 10</span></label>
     <input type="file" name="tracks" accept="audio/*" multiple required>
     <div class="row">
@@ -101,7 +101,7 @@ async function load() {
     <b>${esc(j.visual)}</b> · ${j.tracks} треков · ${j.settings.duration / 3600} ч
     <div class="st-${esc(j.status)}">${esc(j.status)}${j.step && j.status !== 'готово' ? ': ' + esc(j.step) : ''}${j.seconds != null ? ' · ' + Math.round(j.seconds / 60) + ' мин' : ''}</div>
     ${j.status === 'работает' ? `<div class="bar"><i style="width:${Math.round(j.progress * 100)}%"></i></div>` : ''}
-    ${j.file ? `<a href="jobs/${j.id}/video">Скачать</a> <span class="muted">${j.size_gb} ГБ</span> · ` : ''}
+    ${j.file ? `<a href="jobs/${j.id}/video?watch=1" target="_blank">Смотреть</a> · <a href="jobs/${j.id}/video">Скачать</a> <span class="muted">${j.size_gb} ГБ</span> · ` : ''}
     ${j.status !== 'работает' ? `<a href="#" onclick="del('${j.id}');return false">Удалить</a>` : ''}
   </div>`).join('');
 }
