@@ -25,7 +25,7 @@ class RenderSettings:
     height: int = 2160
     fps: int = 60
     duration: float = 3 * 3600          # final video length, seconds
-    loop_mode: str = "crossfade"        # crossfade | pingpong | none (clips only)
+    loop_mode: str = "crossfade"        # crossfade | chain | pingpong | none (clips only)
     loop_crossfade: float = 1.5         # seconds of blend at the loop seam
     speed: float = 1.0                  # 0.5 = twice slower (after a 60 fps upscale)
     saturation: float = 1.0
@@ -116,8 +116,10 @@ def _image_segment(src: Path, dst: Path, s: RenderSettings) -> None:
           "-vf", _frame_filter(s), "-an", *_video_codec_args(s), str(dst)])
 
 
-def _normalized_clip(src: Path, dst: Path, s: RenderSettings) -> float:
-    _run(["ffmpeg", "-y", "-i", str(src), "-vf", _frame_filter(s), "-an",
+def _normalized_clip(src: Path, dst: Path, s: RenderSettings, skip_first: bool = False) -> float:
+    # skip_first: a chained clip starts on the previous clip's last frame; drop the repeat
+    vf = ("trim=start_frame=1,setpts=PTS-STARTPTS," if skip_first else "") + _frame_filter(s)
+    _run(["ffmpeg", "-y", "-i", str(src), "-vf", vf, "-an",
           *_work_codec_args(s), str(dst)])
     return probe_duration(dst)
 
@@ -162,11 +164,13 @@ def _pingpong_parts(clip: Path, d: float, s: RenderSettings, tmp: Path) -> list[
 def _join_clips(clips: list[Path], dst: Path, s: RenderSettings, tmp: Path) -> float:
     """Several clips one after another. Clips that start and end on the same
     frame join without a seam by plain concatenation; with "crossfade" each
-    joint is also blended, which hides joints between clips that don't match."""
+    joint is also blended, which hides joints between clips that don't match.
+    "chain": each clip was generated from the previous clip's last frame, so
+    the clips are joined as they are and only the loop seam is blended."""
     parts = []
     for i, c in enumerate(clips):
         n = tmp / f"part_{i:02d}.mp4"
-        parts.append((n, _normalized_clip(c, n, s)))
+        parts.append((n, _normalized_clip(c, n, s, skip_first=i > 0 and s.loop_mode == "chain")))
     if s.loop_mode != "crossfade":
         lst = tmp / "parts.txt"
         lst.write_text("".join(f"file '{n}'\n" for n, _ in parts))
@@ -210,7 +214,7 @@ def build_loop_segment(visuals: list[Path], dst: Path, s: RenderSettings, tmp: P
         d = _normalized_clip(visuals[0], clip, s)
     else:
         d = _join_clips(visuals, clip, s, tmp)
-    if s.loop_mode == "crossfade":
+    if s.loop_mode in ("crossfade", "chain"):
         _crossfade_loop(clip, dst, d, s)
     elif s.loop_mode == "pingpong":
         _encode_list(_pingpong_parts(clip, d, s, tmp), dst, s, tmp)
