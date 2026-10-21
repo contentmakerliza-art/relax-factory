@@ -51,6 +51,8 @@ class Job:
     output: Path
     settings: RenderSettings = field(default_factory=RenderSettings)
     ambient: Path | None = None         # background sound mixed under the music
+    mask: Path | None = None            # black/white picture: white moves, black stays still
+    still: Path | None = None           # the still picture under the mask (default: first frame)
     previews: list[Path] = field(default_factory=list)   # filled by render()
     timecodes: str = ""                 # filled by render(): track list for the description
 
@@ -260,11 +262,47 @@ DRIFT = {
 }
 
 
-def build_loop_segment(visuals: list[Path], dst: Path, s: RenderSettings, tmp: Path) -> float:
+def _masked(src: Path, dst: Path, still: Path, mask: Path, s: RenderSettings) -> None:
+    """Only the white part of the mask moves; the rest is the still picture
+    on every frame, so seams and stray clip details there cannot show."""
+    fit = (f"scale={s.width}:{s.height}:force_original_aspect_ratio=increase:flags=lanczos,"
+           f"crop={s.width}:{s.height},setsar=1")
+    soft = max(2, round(8 * s.height / 1080))  # feathered edge, about 15-20 px at 1080p
+    fr = ["-loop", "1", "-framerate", str(s.fps)]
+    _run(["ffmpeg", "-y", "-i", str(src), *fr, "-i", str(still), *fr, "-i", str(mask),
+          "-filter_complex",
+          f"[0:v]format=gbrp[v];[1:v]{fit},format=gbrp[p];"
+          f"[2:v]{fit},format=gray,gblur=sigma={soft},format=gbrp[m];"
+          "[p][v][m]maskedmerge=planes=7,format=yuv420p[out]",
+          "-map", "[out]", "-an", "-t", f"{probe_duration(src):.4f}", *_video_codec_args(s), str(dst)])
+
+
+def build_loop_segment(visuals: list[Path], dst: Path, s: RenderSettings, tmp: Path,
+                       mask: Path | None = None, still: Path | None = None) -> float:
+    if mask:
+        clips = [v for v in visuals if v.suffix.lower() not in IMAGE_EXTS]
+        if not clips:
+            raise ValueError("Для маски нужны клипы")
+        if still is None:
+            still = tmp / "still.png"
+            _run(["ffmpeg", "-y", "-i", str(clips[0]), "-frames:v", "1", str(still)])
+        raw = tmp / "loop_unmasked.mp4"
+        _build_loop_segment(clips, raw, replace(s, codec="work"), tmp)
+        if s.color_drift not in DRIFT:
+            _masked(raw, dst, still, mask, s)
+            return probe_duration(dst)
+        masked = tmp / "loop_masked.mp4"
+        _masked(raw, masked, still, mask, replace(s, codec="work"))
+        return _drift(masked, dst, probe_duration(masked), s)
     if s.color_drift not in DRIFT:
         return _build_loop_segment(visuals, dst, s, tmp)
     raw = tmp / "loop_raw.mp4"
     d = _build_loop_segment(visuals, raw, replace(s, codec="work"), tmp)
+    return _drift(raw, dst, d, s)
+
+
+def _drift(raw: Path, dst: Path, d: float, s: RenderSettings) -> float:
+    tmp = raw.parent
     # the tint must come back to its start at the end of the loop: a short
     # loop is repeated inside the segment so one round of colour is slow
     m = max(1, math.ceil(s.color_period / d - 0.01))
@@ -562,7 +600,7 @@ def render(job: Job, progress: Progress | None = None) -> Path:
         tmp = Path(td)
         say("Готовлю петлю видео", 0.05)
         seg = tmp / "loop.mp4"
-        seg_len = build_loop_segment(job.visuals, seg, s, tmp)
+        seg_len = build_loop_segment(job.visuals, seg, s, tmp, job.mask, job.still)
 
         say("Делаю превью", 0.3)
         job.previews = make_previews(seg, seg_len, job.output)
