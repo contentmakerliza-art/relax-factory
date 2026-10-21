@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import math
 import random
+import re
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
@@ -34,6 +35,7 @@ class RenderSettings:
     track_crossfade: float = 3.0        # seconds between tracks
     shuffle_tracks: bool = False        # reshuffle each pass over the album
     loudness: float = -14.0             # LUFS target (EBU R128)
+    ambient_level: float = -12.0        # background sound, dB relative to the music
     video_bitrate: str = "15M"          # loop segment bitrate; not above the source
     codec: str = "h264"                 # h264 | h265
     audio_bitrate: str = "320k"
@@ -46,6 +48,9 @@ class Job:
     tracks: list[Path]
     output: Path
     settings: RenderSettings = field(default_factory=RenderSettings)
+    ambient: Path | None = None         # background sound mixed under the music
+    previews: list[Path] = field(default_factory=list)   # filled by render()
+    timecodes: str = ""                 # filled by render(): track list for the description
 
 
 Progress = Callable[[str, float], None]
@@ -165,33 +170,44 @@ def _pingpong_parts(clip: Path, d: float, s: RenderSettings, tmp: Path) -> list[
 
 
 def _join_clips(clips: list[Path], dst: Path, s: RenderSettings, tmp: Path) -> float:
-    """Several clips one after another. Clips that start and end on the same
-    frame join without a seam by plain concatenation; with "crossfade" each
-    joint is also blended, which hides joints between clips that don't match.
-    "chain": each clip was generated from the previous clip's last frame, so
-    the clips are joined as they are and only the loop seam is blended."""
-    parts = []
+    """Several clips one after another, joined as they are. "chain": each clip
+    was generated from the previous clip's last frame, so its first frame (a
+    repeat) is dropped and only the loop seam is blended afterwards."""
+    lst = tmp / "parts.txt"
+    names = []
     for i, c in enumerate(clips):
         n = tmp / f"part_{i:02d}.mp4"
-        parts.append((n, _normalized_clip(c, n, s, skip_first=i > 0 and s.loop_mode.startswith("chain"))))
-    if s.loop_mode != "crossfade":
-        lst = tmp / "parts.txt"
-        lst.write_text("".join(f"file '{n}'\n" for n, _ in parts))
-        _run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", str(dst)])
-        return probe_duration(dst)
-    x = min([s.loop_crossfade] + [d / 2.5 for _, d in parts])
-    inputs, steps, prev, offset = [], [], "[0:v]", 0.0
-    for k, (n, d) in enumerate(parts):
-        inputs += ["-i", str(n)]
-        if k:
-            offset += parts[k - 1][1] - x
-            steps.append(f"{prev}[{k}:v]xfade=transition=fade:duration={x}:offset={offset:.4f}[j{k}]")
-            prev = f"[j{k}]"
-    script = tmp / "join_filter.txt"
-    script.write_text(";".join(steps) + f";{prev}format=yuv420p[v]")
-    _run(["ffmpeg", "-y", *inputs, "-filter_complex_script", str(script), "-map", "[v]",
-          "-an", *_work_codec_args(s), str(dst)])
+        _normalized_clip(c, n, s, skip_first=i > 0 and s.loop_mode.startswith("chain"))
+        names.append(n)
+    lst.write_text("".join(f"file '{n}'\n" for n in names))
+    _run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", str(dst)])
     return probe_duration(dst)
+
+
+def _crossfade_ring(clips: list[Path], dst: Path, s: RenderSettings, tmp: Path) -> None:
+    """Each clip blends into the next and the last one into the first, so the
+    whole round repeats without a seam. Every joint is made by its own small
+    ffmpeg run (this clip from x to its end + the head of the next one), so
+    memory stays the same for 5 clips or 50."""
+    parts = []
+    for i, c in enumerate(clips):
+        n = tmp / f"ring_src_{i:03d}.mp4"
+        parts.append((n, _normalized_clip(c, n, s)))
+    # whole frames, so every piece ends exactly where the next one begins
+    x = round(min([s.loop_crossfade] + [d / 2.5 for _, d in parts]) * s.fps) / s.fps
+    pieces = []
+    for i, (n, d) in enumerate(parts):
+        nxt = parts[(i + 1) % len(parts)][0]
+        piece = tmp / f"ring_{i:03d}.mp4"
+        flt = (
+            f"[0:v]trim=start={x},setpts=PTS-STARTPTS,fps={s.fps}[main];"
+            f"[1:v]trim=end={x},setpts=PTS-STARTPTS,fps={s.fps}[head];"
+            f"[main][head]xfade=transition=fade:duration={x}:offset={d - 2 * x:.4f},format=yuv420p[v]"
+        )
+        _run(["ffmpeg", "-y", "-i", str(n), "-i", str(nxt), "-filter_complex", flt, "-map", "[v]",
+              "-an", *_work_codec_args(s), str(piece)])
+        pieces.append(piece)
+    _encode_list(pieces, dst, s, tmp)
 
 
 def _best_loop_point(clip: Path, d: float, s: RenderSettings) -> float:
@@ -231,6 +247,9 @@ def build_loop_segment(visuals: list[Path], dst: Path, s: RenderSettings, tmp: P
             parts += _pingpong_parts(norm, d, s, sub)
         _encode_list(parts, dst, s, tmp)
         return probe_duration(dst)
+    if len(visuals) > 1 and s.loop_mode == "crossfade":
+        _crossfade_ring(visuals, dst, s, tmp)
+        return probe_duration(dst)
     if len(visuals) == 1:
         d = _normalized_clip(visuals[0], clip, s)
     else:
@@ -265,10 +284,68 @@ def measure_loudness(path: Path) -> float:
     raise RuntimeError(f"Не удалось измерить громкость: {path.name}")
 
 
-def build_audio(tracks: list[Path], dst: Path, s: RenderSettings, tmp: Path) -> None:
+def _blend_cycle(src: Path, dst: Path, xs: int, length: int) -> None:
+    """`length` samples of `src` from `xs` on, with the first `xs` samples
+    blended into the end: repeating the result back to back has no seam."""
+    _run(["ffmpeg", "-y", "-i", str(src), "-i", str(src), "-filter_complex",
+          f"[0:a]atrim=start_sample={xs}:end_sample={xs + length},asetpts=PTS-STARTPTS[body];"
+          f"[1:a]atrim=end_sample={xs},asetpts=PTS-STARTPTS[head];"
+          f"[body][head]acrossfade=ns={xs}:c1=tri:c2=tri[cycle]",
+          "-map", "[cycle]", "-c:a", "pcm_s16le", str(dst)])
+
+
+def _ambient_cycle(src: Path, dst: Path, n: int, s: RenderSettings, tmp: Path) -> None:
+    """Background sound looped seamlessly to exactly `n` samples (one music
+    cycle), so music and background repeat together without a seam."""
+    sr = 48000
+    gain = s.loudness + s.ambient_level - measure_loudness(src)
+    wav = tmp / "ambient.wav"
+    _run(["ffmpeg", "-y", "-i", str(src), "-af", f"volume={gain:.2f}dB",
+          "-ac", "2", "-ar", str(sr), str(wav)])
+    m = _samples(wav)
+    xs = min(3 * sr, m // 3)
+    if xs < sr // 10:
+        raise ValueError("Фоновый звук слишком короткий")
+    own = tmp / "ambient_own.wav"           # the file itself as a seamless loop
+    _blend_cycle(wav, own, xs, m - xs)
+    longer = tmp / "ambient_long.wav"       # repeated past one music cycle
+    xa = min(3 * sr, n // 3)
+    _run(["ffmpeg", "-y", "-stream_loop", "-1", "-i", str(own), "-af",
+          f"atrim=end_sample={n + xa}", "-c:a", "pcm_s16le", str(longer)])
+    _blend_cycle(longer, dst, xa, n)
+
+
+def _clock(t: float) -> str:
+    t = int(t)
+    h, m, sec = t // 3600, t // 60 % 60, t % 60
+    return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
+
+
+def _track_title(p: Path) -> str:
+    name = re.sub(r"^\s*\d+\s*[-._)]?\s*", "", p.stem).replace("_", " ").strip()
+    return name or p.stem
+
+
+def _timecodes(names: list[str], starts: list[float], cycle: float, duration: float) -> str:
+    """Track list for the video description, over the whole video; only the
+    first round if listing every repeat would be too long for YouTube."""
+    rows, k = [], 0
+    while k * cycle < duration:
+        for name, t in zip(names, starts):
+            if k * cycle + t < duration - 10:
+                rows.append(f"{_clock(k * cycle + t)} {name}")
+        k += 1
+    if sum(len(r) + 1 for r in rows) > 4000:
+        rows = rows[:len(names)]
+    return "\n".join(rows)
+
+
+def build_audio(tracks: list[Path], dst: Path, s: RenderSettings, tmp: Path,
+                ambient: Path | None = None) -> str:
     """The album is normalised and crossfaded once into a seamless cycle (its
     end blends into its beginning); the cycle is then repeated as raw PCM and
-    encoded once, so hours of audio cost about as much as one album."""
+    encoded once, so hours of audio cost about as much as one album.
+    Returns the track list with times for the description."""
     order = list(range(len(tracks)))
     if s.shuffle_tracks:
         random.Random(s.seed).shuffle(order)
@@ -309,15 +386,28 @@ def build_audio(tracks: list[Path], dst: Path, s: RenderSettings, tmp: Path) -> 
         raise ValueError("Альбом слишком короткий")
     cycle = tmp / "album_cycle.wav"
     if xs > 0:
-        _run(["ffmpeg", "-y", "-i", str(album), "-i", str(album), "-filter_complex",
-              f"[0:a]atrim=start_sample={xs}:end_sample={xs + cycle_len},asetpts=PTS-STARTPTS[body];"
-              f"[1:a]atrim=end_sample={xs},asetpts=PTS-STARTPTS[head];"
-              f"[body][head]acrossfade=ns={xs}:c1=tri:c2=tri[cycle]",
-              "-map", "[cycle]", "-c:a", "pcm_s16le", str(cycle)])
+        _blend_cycle(album, cycle, xs, cycle_len)
     else:
         _run(["ffmpeg", "-y", "-i", str(album), "-af", f"atrim=end_sample={cycle_len}",
               "-c:a", "pcm_s16le", str(cycle)])
+    if ambient:
+        amb = tmp / "ambient_cycle.wav"
+        _ambient_cycle(ambient, amb, cycle_len, s, tmp)
+        mixed = tmp / "album_mixed.wav"
+        _run(["ffmpeg", "-y", "-i", str(cycle), "-i", str(amb), "-filter_complex",
+              "[0:a][1:a]amix=inputs=2:normalize=0:duration=first,"
+              "alimiter=limit=0.89:level=disabled[a]",
+              "-map", "[a]", "-c:a", "pcm_s16le", str(mixed)])
+        cycle = mixed
     encode_seamless_aac(cycle, dst, s.duration, s.audio_bitrate, tmp)
+
+    # track k starts where its crossfade begins; the cycle starts x into the album
+    starts, t = [], 0.0
+    for w in wavs:
+        starts.append(max(0.0, t - xs / sr))
+        t += _samples(w) / sr - x
+    names = [_track_title(tracks[i]) for i in order]
+    return _timecodes(names, starts, cycle_len / sr, s.duration)
 
 
 def _samples(wav: Path) -> int:
@@ -376,6 +466,17 @@ def encode_seamless_aac(cycle: Path, dst: Path, duration: float, bitrate: str, t
 
 # ---------- assembly ----------
 
+def make_previews(seg: Path, seg_len: float, output: Path, count: int = 4) -> list[Path]:
+    """Frames spread over the loop, 1280x720 JPEG, to pick a thumbnail from."""
+    out = []
+    for i in range(count):
+        p = output.with_name(f"{output.stem}_preview_{i + 1}.jpg")
+        _run(["ffmpeg", "-y", "-ss", f"{seg_len * (i + 0.5) / count:.3f}", "-i", str(seg),
+              "-frames:v", "1", "-vf", "scale=1280:720:flags=lanczos", "-q:v", "2", str(p)])
+        out.append(p)
+    return out
+
+
 def render(job: Job, progress: Progress | None = None) -> Path:
     s = job.settings
     say = progress or (lambda msg, frac: None)
@@ -388,9 +489,13 @@ def render(job: Job, progress: Progress | None = None) -> Path:
         seg = tmp / "loop.mp4"
         seg_len = build_loop_segment(job.visuals, seg, s, tmp)
 
+        say("Делаю превью", 0.3)
+        job.previews = make_previews(seg, seg_len, job.output)
+
         say("Собираю и выравниваю музыку", 0.35)
         audio = tmp / "audio.m4a"
-        build_audio(job.tracks, audio, s, tmp)
+        job.timecodes = build_audio(job.tracks, audio, s, tmp, job.ambient)
+        job.output.with_suffix(".txt").write_text(job.timecodes + "\n", encoding="utf-8")
 
         say("Склеиваю видео до нужной длины", 0.8)
         repeats = math.ceil(s.duration / seg_len) + 1

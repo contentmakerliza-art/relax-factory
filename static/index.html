@@ -22,6 +22,8 @@
   .bar { height:6px; background:var(--line); border-radius:3px; overflow:hidden; margin:6px 0; } .bar i { display:block; height:100%; background:var(--accent); }
   .st-готово { color:var(--ok); } .st-ошибка { color:var(--err); } .muted { color:var(--muted); font-size:14px; }
   a { color:var(--accent); }
+  .thumbs { display:grid; grid-template-columns:repeat(4,1fr); gap:6px; margin:8px 0; } .thumbs img { width:100%; border-radius:6px; display:block; }
+  textarea { width:100%; margin-top:6px; padding:8px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--text); font:13px/1.4 ui-monospace, monospace; }
 </style>
 </head>
 <body>
@@ -36,6 +38,9 @@
     <label>Треки <span class="hint">MP3, можно выбрать сразу все 10</span></label>
     <input type="file" name="tracks" accept="audio/*" multiple>
     <input type="url" name="tracks_url" placeholder="или ссылка на папку Google Диска с треками" style="margin-top:6px">
+    <label>Фоновый звук <span class="hint">необязательно: шум воды, дождь, пузырьки. Один файл, тихо идёт под музыкой</span></label>
+    <input type="file" name="ambient" accept="audio/*">
+    <input type="url" name="ambient_url" placeholder="или ссылка на файл или папку Google Диска" style="margin-top:6px">
     <p class="hint" style="margin:6px 0 0">Со ссылкой сервер сам скачает файлы с Диска, это быстрее. Доступ к папке: «Все, у кого есть ссылка».</p>
     <div class="row">
       <div><label>Длина, часов</label><input type="number" name="hours" value="3" min="0.1" max="12" step="any"></div>
@@ -53,6 +58,7 @@
         <div><label>Битрейт, Мбит/с</label><input type="number" name="bitrate" value="15" min="4" max="60"></div>
         <div><label>Кодек</label><select name="codec"><option value="h264">H.264</option><option value="h265">H.265 (файл меньше)</option></select></div>
         <div><label>Сколько треков взять <span class="hint">случайно, 0 = все</span></label><input type="number" name="tracks_pick" value="0" min="0" max="200"></div>
+        <div><label>Громкость фона</label><select name="ambient_level"><option value="-18">Еле слышно</option><option value="-12" selected>Тихо</option><option value="-6">Заметно</option></select></div>
         <div><label>Порядок треков</label><select name="shuffle"><option value="false">Как в альбоме</option><option value="true">Перемешивать</option></select></div>
       </div>
     </details>
@@ -72,11 +78,12 @@ async function call(url, opts) {
 }
 f.addEventListener('submit', async e => {
   e.preventDefault();
-  const vUrl = f.visual_url.value.trim(), tUrl = f.tracks_url.value.trim();
-  const visual = vUrl ? [] : f.visual.files, tracks = tUrl ? [] : f.tracks.files;
+  const vUrl = f.visual_url.value.trim(), tUrl = f.tracks_url.value.trim(), aUrl = f.ambient_url.value.trim();
+  const visual = vUrl ? [] : f.visual.files, tracks = tUrl ? [] : f.tracks.files, ambient = aUrl ? [] : f.ambient.files;
   if (!visual.length && !vUrl) { msg.textContent = 'Выберите клипы или вставьте ссылку на Google Диск'; return; }
   if (!tracks.length && !tUrl) { msg.textContent = 'Выберите треки или вставьте ссылку на Google Диск'; return; }
-  const files = [...[...visual].map(x => ['visual', x]), ...[...tracks].map(x => ['tracks', x])];
+  const files = [...[...visual].map(x => ['visual', x]), ...[...tracks].map(x => ['tracks', x]),
+                 ...[...ambient].map(x => ['ambient', x])];
   const total = files.reduce((n, [, x]) => n + x.size, 0);
   let sent = 0;
   go.disabled = true;
@@ -100,7 +107,7 @@ f.addEventListener('submit', async e => {
       }
     }
     const form = new FormData(f);
-    form.delete('visual'); form.delete('tracks');
+    form.delete('visual'); form.delete('tracks'); form.delete('ambient');
     await call(`jobs/${id}/start`, { method: 'POST', body: form });
     msg.textContent = 'Добавлено в очередь'; f.reset();
   } catch (err) {
@@ -119,6 +126,8 @@ async function load() {
     <div class="st-${esc(j.status)}">${esc(j.status)}${j.step && j.status !== 'готово' ? ': ' + esc(j.step) : ''}${j.seconds != null ? ' · ' + Math.round(j.seconds / 60) + ' мин' : ''}</div>
     ${j.status === 'работает' ? `<div class="bar"><i style="width:${Math.round(j.progress * 100)}%"></i></div>` : ''}
     ${j.file ? `<a href="jobs/${j.id}/video?watch=1" target="_blank">Смотреть</a> · <a href="jobs/${j.id}/video">Скачать</a> <span class="muted">${j.size_gb} ГБ</span> · ` : ''}
+    ${j.previews ? `<div class="thumbs">${[...Array(j.previews)].map((_, i) => `<a href="jobs/${j.id}/preview/${i + 1}?download=1" title="Скачать превью"><img src="jobs/${j.id}/preview/${i + 1}" alt="Превью ${i + 1}"></a>`).join('')}</div>` : ''}
+    ${j.timecodes ? `<details><summary>Таймкоды для описания</summary><textarea readonly rows="8">${esc(j.timecodes)}</textarea><a href="#" onclick="navigator.clipboard.writeText(this.previousElementSibling.value);this.textContent='Скопировано';return false">Скопировать</a></details>` : ''}
     ${j.status !== 'работает' ? `<a href="#" onclick="del('${j.id}');return false">Удалить</a>` : ''}
   </div>`).join('');
 }
