@@ -349,11 +349,13 @@ def _blend_cycle(src: Path, dst: Path, xs: int, length: int) -> None:
           "-map", "[cycle]", "-c:a", "pcm_s16le", str(dst)])
 
 
-def _ambient_cycle(src: Path, dst: Path, n: int, s: RenderSettings, tmp: Path) -> None:
+def _ambient_cycle(src: Path, dst: Path, n: int, s: RenderSettings, tmp: Path,
+                   level: float | None = None) -> None:
     """Background sound looped seamlessly to exactly `n` samples (one music
     cycle), so music and background repeat together without a seam."""
     sr = 48000
-    gain = s.loudness + s.ambient_level - measure_loudness(src)
+    level = s.ambient_level if level is None else level
+    gain = s.loudness + level - measure_loudness(src)
     wav = tmp / "ambient.wav"
     _run(["ffmpeg", "-y", "-i", str(src), "-af", f"volume={gain:.2f}dB",
           "-ac", "2", "-ar", str(sr), str(wav)])
@@ -368,6 +370,24 @@ def _ambient_cycle(src: Path, dst: Path, n: int, s: RenderSettings, tmp: Path) -
     _run(["ffmpeg", "-y", "-stream_loop", "-1", "-i", str(own), "-af",
           f"atrim=end_sample={n + xa}", "-c:a", "pcm_s16le", str(longer)])
     _blend_cycle(longer, dst, xa, n)
+
+
+def build_ambient_only(ambient: Path, dst: Path, s: RenderSettings, tmp: Path) -> str:
+    """No music: the background sound alone, at full loudness, as a seamless
+    cycle of whole AAC frames (at least 10 minutes, so the blend is rare)."""
+    sr, frame = 48000, 1024
+    # limit peaks before the cycle is cut: a limiter on the cycle itself
+    # shifts it by its lookahead and the repeat would click
+    gain = s.loudness - measure_loudness(ambient)
+    limited = tmp / "ambient_limited.wav"
+    _run(["ffmpeg", "-y", "-i", str(ambient), "-af",
+          f"volume={gain:.2f}dB,alimiter=limit=0.89:level=disabled:latency=1",
+          "-ac", "2", "-ar", str(sr), "-c:a", "pcm_s16le", str(limited)])
+    n = max(_samples(limited), 600 * sr) // frame * frame
+    cycle = tmp / "ambient_only_cycle.wav"
+    _ambient_cycle(limited, cycle, n, s, tmp, level=0.0)
+    encode_seamless_aac(cycle, dst, s.duration, s.audio_bitrate, tmp)
+    return ""
 
 
 def _clock(t: float) -> str:
@@ -451,7 +471,7 @@ def build_audio(tracks: list[Path], dst: Path, s: RenderSettings, tmp: Path,
         mixed = tmp / "album_mixed.wav"
         _run(["ffmpeg", "-y", "-i", str(cycle), "-i", str(amb), "-filter_complex",
               "[0:a][1:a]amix=inputs=2:normalize=0:duration=first,"
-              "alimiter=limit=0.89:level=disabled[a]",
+              "alimiter=limit=0.89:level=disabled:latency=1[a]",
               "-map", "[a]", "-c:a", "pcm_s16le", str(mixed)])
         cycle = mixed
     encode_seamless_aac(cycle, dst, s.duration, s.audio_bitrate, tmp)
@@ -535,8 +555,8 @@ def make_previews(seg: Path, seg_len: float, output: Path, count: int = 4) -> li
 def render(job: Job, progress: Progress | None = None) -> Path:
     s = job.settings
     say = progress or (lambda msg, frac: None)
-    if not job.tracks:
-        raise ValueError("Нужен хотя бы один трек")
+    if not job.tracks and not job.ambient:
+        raise ValueError("Нужен хотя бы один трек или фоновый звук")
     job.output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="render_") as td:
         tmp = Path(td)
@@ -547,9 +567,12 @@ def render(job: Job, progress: Progress | None = None) -> Path:
         say("Делаю превью", 0.3)
         job.previews = make_previews(seg, seg_len, job.output)
 
-        say("Собираю и выравниваю музыку", 0.35)
+        say("Собираю и выравниваю звук", 0.35)
         audio = tmp / "audio.m4a"
-        job.timecodes = build_audio(job.tracks, audio, s, tmp, job.ambient)
+        if job.tracks:
+            job.timecodes = build_audio(job.tracks, audio, s, tmp, job.ambient)
+        else:
+            job.timecodes = build_ambient_only(job.ambient, audio, s, tmp)
         job.output.with_suffix(".txt").write_text(job.timecodes + "\n", encoding="utf-8")
 
         say("Склеиваю видео до нужной длины", 0.8)
