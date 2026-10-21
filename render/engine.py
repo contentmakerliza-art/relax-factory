@@ -26,7 +26,7 @@ class RenderSettings:
     height: int = 2160
     fps: int = 60
     duration: float = 3 * 3600          # final video length, seconds
-    loop_mode: str = "crossfade"        # crossfade | chain | chain_pingpong | pingpong | none (clips only)
+    loop_mode: str = "crossfade"        # crossfade | scenes | chain | chain_pingpong | pingpong | none (clips only)
     loop_crossfade: float = 1.5         # seconds of blend at the loop seam
     find_loop_point: bool = False       # chain: cut where the frame is most like the first
     speed: float = 1.0                  # 0.5 = twice slower (after a 60 fps upscale)
@@ -188,15 +188,36 @@ def _join_clips(clips: list[Path], dst: Path, s: RenderSettings, tmp: Path) -> f
     return probe_duration(dst)
 
 
-def _crossfade_ring(clips: list[Path], dst: Path, s: RenderSettings, tmp: Path) -> None:
+def _scene_key(p: Path) -> str:
+    """"A1", "A2" -> "A"; "pink_01" -> "pink": the name without its number."""
+    return re.sub(r"[\s_\-.]*\d+$", "", p.stem) or p.stem
+
+
+def _scenes(clips: list[Path], s: RenderSettings, tmp: Path) -> list[tuple[Path, float]]:
+    """Clips of one scene (same name, different number) were made as a chain,
+    each from the previous one's last frame: they are joined as they are."""
+    groups: dict[str, list[Path]] = {}
+    for c in clips:
+        groups.setdefault(_scene_key(c), []).append(c)
+    out = []
+    for g, members in enumerate(groups.values()):
+        lst, names = tmp / f"scene_{g:03d}.txt", []
+        for i, c in enumerate(members):
+            n = tmp / f"scene_{g:03d}_{i:02d}.mp4"
+            _normalized_clip(c, n, s, skip_first=i > 0)
+            names.append(n)
+        lst.write_text("".join(f"file '{n}'\n" for n in names))
+        dst = tmp / f"scene_{g:03d}.mp4"
+        _run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", str(dst)])
+        out.append((dst, probe_duration(dst)))
+    return out
+
+
+def _crossfade_ring(parts: list[tuple[Path, float]], dst: Path, s: RenderSettings, tmp: Path) -> None:
     """Each clip blends into the next and the last one into the first, so the
     whole round repeats without a seam. Every joint is made by its own small
     ffmpeg run (this clip from x to its end + the head of the next one), so
     memory stays the same for 5 clips or 50."""
-    parts = []
-    for i, c in enumerate(clips):
-        n = tmp / f"ring_src_{i:03d}.mp4"
-        parts.append((n, _normalized_clip(c, n, s)))
     # whole frames, so every piece ends exactly where the next one begins
     x = round(min([s.loop_crossfade] + [d / 2.5 for _, d in parts]) * s.fps) / s.fps
     pieces = []
@@ -274,8 +295,15 @@ def _build_loop_segment(visuals: list[Path], dst: Path, s: RenderSettings, tmp: 
             parts += _pingpong_parts(norm, d, s, sub)
         _encode_list(parts, dst, s, tmp)
         return probe_duration(dst)
+    if s.loop_mode == "scenes":
+        _crossfade_ring(_scenes(visuals, s, tmp), dst, s, tmp)
+        return probe_duration(dst)
     if len(visuals) > 1 and s.loop_mode == "crossfade":
-        _crossfade_ring(visuals, dst, s, tmp)
+        parts = []
+        for i, c in enumerate(visuals):
+            n = tmp / f"ring_src_{i:03d}.mp4"
+            parts.append((n, _normalized_clip(c, n, s)))
+        _crossfade_ring(parts, dst, s, tmp)
         return probe_duration(dst)
     if len(visuals) == 1:
         d = _normalized_clip(visuals[0], clip, s)

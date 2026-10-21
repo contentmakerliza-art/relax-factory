@@ -32,7 +32,7 @@
   <p class="sub">Картинка или клип + альбом треков → готовое длинное видео.</p>
 
   <form class="card" id="f">
-    <label>Картинка или клипы <span class="hint">одна картинка PNG/JPG или один-несколько клипов MP4 (идут по очереди)</span></label>
+    <label>Картинка или клипы <span class="hint">одна картинка PNG/JPG или один-несколько клипов MP4 (идут по очереди). Для «Сцен»: A1, A2, A3 — одна сцена, B1, B2 — следующая</span></label>
     <input type="file" name="visual" accept="image/*,video/*" multiple>
     <input type="url" name="visual_url" placeholder="или ссылка на папку Google Диска с клипами" style="margin-top:6px">
     <label>Треки <span class="hint">MP3, можно выбрать сразу все 10</span></label>
@@ -45,7 +45,7 @@
     <div class="row">
       <div><label>Длина, часов</label><input type="number" name="hours" value="3" min="0.1" max="12" step="any"></div>
       <div><label>Качество</label><select name="resolution"><option value="4k">4K</option><option value="1080p">1080p</option></select></div>
-      <div><label>Петля клипа</label><select name="loop_mode"><option value="crossfade">Плавная склейка</option><option value="chain">Цепочка (клип из конца предыдущего)</option><option value="chain_pingpong">Цепочка туда и обратно</option><option value="pingpong">Вперёд-назад</option><option value="none">Без обработки</option></select></div>
+      <div><label>Петля клипа</label><select name="loop_mode"><option value="crossfade">Плавная склейка</option><option value="scenes">Сцены: цепочка внутри, растворение между</option><option value="chain">Цепочка (клип из конца предыдущего)</option><option value="chain_pingpong">Цепочка туда и обратно</option><option value="pingpong">Вперёд-назад</option><option value="none">Без обработки</option></select></div>
     </div>
     <details>
       <summary>Дополнительно</summary>
@@ -54,7 +54,7 @@
         <div><label>Круг цвета, сек</label><input type="number" name="color_period" value="120" min="20" max="600" step="10"></div>
         <div><label>Кадров в секунду</label><select name="fps"><option>60</option><option>30</option></select></div>
         <div><label>Скорость клипа</label><select name="speed"><option value="1">Обычная</option><option value="0.75">Медленнее</option><option value="0.5">В 2 раза медленнее</option></select></div>
-        <div><label>Переход между клипами, сек <span class="hint">для «Плавной склейки», до 3</span></label><input type="number" name="loop_crossfade" value="1.5" min="0.5" max="4" step="0.5"></div>
+        <div><label>Переход между клипами, сек <span class="hint">для «Плавной склейки» и «Сцен», до 3</span></label><input type="number" name="loop_crossfade" value="1.5" min="0.5" max="4" step="0.5"></div>
         <div><label>Точка возврата <span class="hint">для «Цепочки»</span></label><select name="find_loop_point"><option value="false">В конце последнего клипа</option><option value="true">Искать кадр, похожий на первый</option></select></div>
         <div><label>Переход между треками, сек</label><input type="number" name="track_crossfade" value="3" min="0" max="10" step="0.5"></div>
         <div><label>Битрейт, Мбит/с</label><input type="number" name="bitrate" value="15" min="4" max="60"></div>
