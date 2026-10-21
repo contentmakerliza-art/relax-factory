@@ -32,36 +32,28 @@
   <p class="sub">Картинка или клип + альбом треков → готовое длинное видео.</p>
 
   <form class="card" id="f">
-    <label>Картинка или клипы <span class="hint">одна картинка PNG/JPG или один-несколько клипов MP4 (идут по очереди). Для «Сцен»: A1, A2, A3 — одна сцена, B1, B2 — следующая</span></label>
+    <label>Картинка или клипы <span class="hint">одна картинка PNG/JPG или несколько клипов MP4, идут по очереди</span></label>
     <input type="file" name="visual" accept="image/*,video/*" multiple>
     <input type="url" name="visual_url" placeholder="или ссылка на папку Google Диска с клипами" style="margin-top:6px">
-    <label>Треки <span class="hint">MP3, можно выбрать сразу все 10</span></label>
+    <label>Треки <span class="hint">MP3, можно выбрать сразу все</span></label>
     <input type="file" name="tracks" accept="audio/*" multiple>
     <input type="url" name="tracks_url" placeholder="или ссылка на папку Google Диска с треками" style="margin-top:6px">
-    <label>Фоновый звук <span class="hint">необязательно: шум воды, дождь, пузырьки. Один файл, тихо идёт под музыкой</span></label>
+    <label>Фоновый звук <span class="hint">необязательно: вода, дождь, камин. Тихо идёт под музыкой</span></label>
     <input type="file" name="ambient" accept="audio/*">
     <input type="url" name="ambient_url" placeholder="или ссылка на файл или папку Google Диска" style="margin-top:6px">
-    <p class="hint" style="margin:6px 0 0">Со ссылкой сервер сам скачает файлы с Диска, это быстрее. Доступ к папке: «Все, у кого есть ссылка».</p>
+    <p class="hint" style="margin:6px 0 0">Ссылка на Диск быстрее загрузки. Доступ к папке: «Все, у кого есть ссылка».</p>
     <div class="row">
       <div><label>Длина, часов</label><input type="number" name="hours" value="3" min="0.1" max="12" step="any"></div>
       <div><label>Качество</label><select name="resolution"><option value="4k">4K</option><option value="1080p">1080p</option></select></div>
-      <div><label>Петля клипа</label><select name="loop_mode"><option value="crossfade">Плавная склейка</option><option value="scenes">Сцены: цепочка внутри, растворение между</option><option value="chain">Цепочка (клип из конца предыдущего)</option><option value="chain_pingpong">Цепочка туда и обратно</option><option value="pingpong">Вперёд-назад</option><option value="none">Без обработки</option></select></div>
+      <div><label>Петля клипа</label><select name="loop_mode"><option value="crossfade">Плавная склейка</option><option value="scenes">Сцены (A1, A2 — одна сцена, B1 — следующая)</option><option value="chain">Цепочка</option><option value="pingpong">Вперёд-назад</option></select></div>
     </div>
     <details>
       <summary>Дополнительно</summary>
       <div class="row">
-        <div><label>Смена подсветки <span class="hint">цвет медленно меняется и прячет стыки</span></label><select name="color_drift"><option value="none">Нет</option><option value="soft">Мягкая: синий, бирюзовый, фиолетовый</option><option value="full">Все цвета по кругу</option></select></div>
-        <div><label>Круг цвета, сек</label><input type="number" name="color_period" value="120" min="20" max="600" step="10"></div>
-        <div><label>Кадров в секунду</label><select name="fps"><option>60</option><option>30</option></select></div>
         <div><label>Скорость клипа</label><select name="speed"><option value="1">Обычная</option><option value="0.75">Медленнее</option><option value="0.5">В 2 раза медленнее</option></select></div>
-        <div><label>Переход между клипами, сек <span class="hint">для «Плавной склейки» и «Сцен», до 3</span></label><input type="number" name="loop_crossfade" value="1.5" min="0.5" max="4" step="0.5"></div>
-        <div><label>Точка возврата <span class="hint">для «Цепочки»</span></label><select name="find_loop_point"><option value="false">В конце последнего клипа</option><option value="true">Искать кадр, похожий на первый</option></select></div>
-        <div><label>Переход между треками, сек</label><input type="number" name="track_crossfade" value="3" min="0" max="10" step="0.5"></div>
-        <div><label>Битрейт, Мбит/с</label><input type="number" name="bitrate" value="15" min="4" max="60"></div>
-        <div><label>Кодек</label><select name="codec"><option value="h264">H.264</option><option value="h265">H.265 (файл меньше)</option></select></div>
-        <div><label>Сколько треков взять <span class="hint">случайно, 0 = все</span></label><input type="number" name="tracks_pick" value="0" min="0" max="200"></div>
-        <div><label>Громкость фона</label><select name="ambient_level"><option value="-18">Еле слышно</option><option value="-12" selected>Тихо</option><option value="-6">Заметно</option></select></div>
         <div><label>Порядок треков</label><select name="shuffle"><option value="false">Как в альбоме</option><option value="true">Перемешивать</option></select></div>
+        <div><label>Громкость фона</label><select name="ambient_level"><option value="-18">Еле слышно</option><option value="-12" selected>Тихо</option><option value="-6">Заметно</option></select></div>
+        <div><label>Смена подсветки</label><select name="color_drift"><option value="none">Нет</option><option value="soft">Мягкая</option><option value="full">Все цвета</option></select></div>
       </div>
     </details>
     <button id="go">Рендер</button>
