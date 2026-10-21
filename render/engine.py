@@ -13,7 +13,7 @@ import random
 import re
 import subprocess
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable
 
@@ -31,6 +31,8 @@ class RenderSettings:
     find_loop_point: bool = False       # chain: cut where the frame is most like the first
     speed: float = 1.0                  # 0.5 = twice slower (after a 60 fps upscale)
     saturation: float = 1.0
+    color_drift: str = "none"           # none | soft (blue ± 40°) | full (all colours): slow change of tint
+    color_period: float = 120.0         # seconds for one full round of the tint
     image_segment: float = 10.0         # length of the still-image segment
     track_crossfade: float = 3.0        # seconds between tracks
     shuffle_tracks: bool = False        # reshuffle each pass over the album
@@ -80,6 +82,8 @@ def probe_duration(path: Path) -> float:
 
 
 def _video_codec_args(s: RenderSettings) -> list[str]:
+    if s.codec == "work":  # the loop gets one more pass before the final encode
+        return _work_codec_args(s)
     gop = str(s.fps * 2)
     if s.codec == "h265":
         return ["-c:v", "libx265", "-preset", "fast", "-b:v", s.video_bitrate,
@@ -228,7 +232,30 @@ def _best_loop_point(clip: Path, d: float, s: RenderSettings) -> float:
     return min(d, best / s.fps)
 
 
+DRIFT = {
+    # hue shift in degrees over one round; both end where they start, so the loop has no seam
+    "soft": "40*sin(2*PI*t/{p})",
+    "full": "360*t/{p}",
+}
+
+
 def build_loop_segment(visuals: list[Path], dst: Path, s: RenderSettings, tmp: Path) -> float:
+    if s.color_drift not in DRIFT:
+        return _build_loop_segment(visuals, dst, s, tmp)
+    raw = tmp / "loop_raw.mp4"
+    d = _build_loop_segment(visuals, raw, replace(s, codec="work"), tmp)
+    # the tint must come back to its start at the end of the loop: a short
+    # loop is repeated inside the segment so one round of colour is slow
+    m = max(1, math.ceil(s.color_period / d - 0.01))
+    lst = tmp / "drift_list.txt"
+    lst.write_text(f"file '{raw}'\n" * m)
+    hue = DRIFT[s.color_drift].format(p=f"{m * d:.4f}")
+    _run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(lst), "-an",
+          "-vf", f"hue=h='{hue}'", *_video_codec_args(s), str(dst)])
+    return probe_duration(dst)
+
+
+def _build_loop_segment(visuals: list[Path], dst: Path, s: RenderSettings, tmp: Path) -> float:
     if len(visuals) == 1 and visuals[0].suffix.lower() in IMAGE_EXTS:
         _image_segment(visuals[0], dst, s)
         return probe_duration(dst)

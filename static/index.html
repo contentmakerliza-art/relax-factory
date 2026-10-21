@@ -50,6 +50,8 @@
     <details>
       <summary>Дополнительно</summary>
       <div class="row">
+        <div><label>Смена подсветки <span class="hint">цвет медленно меняется и прячет стыки</span></label><select name="color_drift"><option value="none">Нет</option><option value="soft">Мягкая: синий, бирюзовый, фиолетовый</option><option value="full">Все цвета по кругу</option></select></div>
+        <div><label>Круг цвета, сек</label><input type="number" name="color_period" value="120" min="20" max="600" step="10"></div>
         <div><label>Кадров в секунду</label><select name="fps"><option>60</option><option>30</option></select></div>
         <div><label>Скорость клипа</label><select name="speed"><option value="1">Обычная</option><option value="0.75">Медленнее</option><option value="0.5">В 2 раза медленнее</option></select></div>
         <div><label>Переход между клипами, сек <span class="hint">для «Плавной склейки», до 3</span></label><input type="number" name="loop_crossfade" value="1.5" min="0.5" max="4" step="0.5"></div>
