@@ -36,10 +36,10 @@
     <label>Картинка или клипы <span class="hint">одна картинка PNG/JPG или несколько клипов MP4, идут по очереди</span></label>
     <input type="file" name="visual" accept="image/*,video/*" multiple>
     <input type="url" name="visual_url" placeholder="или ссылка на Google Диск" style="margin-top:6px">
-    <label>Треки <span class="hint">MP3, можно выбрать сразу все</span></label>
+    <label>Треки <span class="hint">MP3, можно выбрать сразу все. Можно без треков, если есть фоновый звук</span></label>
     <input type="file" name="tracks" accept="audio/*" multiple>
     <input type="url" name="tracks_url" placeholder="или ссылка на Google Диск" style="margin-top:6px">
-    <label>Фоновый звук <span class="hint">необязательно: вода, дождь, камин. Тихо идёт под музыкой</span></label>
+    <label>Фоновый звук <span class="hint">вода, дождь, камин. С треками идёт тихо под музыкой, без треков звучит один</span></label>
     <input type="file" name="ambient" accept="audio/*">
     <input type="url" name="ambient_url" placeholder="или ссылка на Google Диск" style="margin-top:6px">
     <p class="hint" style="margin:6px 0 0">Ссылка на Диск быстрее загрузки, особенно с телефона. Доступ к папке: «Все, у кого есть ссылка».</p>
@@ -76,7 +76,7 @@ f.addEventListener('submit', async e => {
   const vUrl = f.visual_url.value.trim(), tUrl = f.tracks_url.value.trim(), aUrl = f.ambient_url.value.trim();
   const visual = vUrl ? [] : f.visual.files, tracks = tUrl ? [] : f.tracks.files, ambient = aUrl ? [] : f.ambient.files;
   if (!visual.length && !vUrl) { msg.textContent = 'Выберите клипы или вставьте ссылку на Google Диск'; return; }
-  if (!tracks.length && !tUrl) { msg.textContent = 'Выберите треки или вставьте ссылку на Google Диск'; return; }
+  if (!tracks.length && !tUrl && !ambient.length && !aUrl) { msg.textContent = 'Выберите треки или фоновый звук (или вставьте ссылку на Google Диск)'; return; }
   const files = [...[...visual].map(x => ['visual', x]), ...[...tracks].map(x => ['tracks', x]),
                  ...[...ambient].map(x => ['ambient', x])];
   const total = files.reduce((n, [, x]) => n + x.size, 0);
@@ -121,7 +121,7 @@ async function load() {
   const rows = JSON.parse(text);
   if (!rows.length) { box.textContent = 'Пока пусто'; return; }
   box.innerHTML = rows.map(j => `<div class="job">
-    <b>${esc(j.visual)}</b> · ${j.tracks} треков · ${j.settings.duration / 3600} ч
+    <b>${esc(j.visual)}</b> · ${j.tracks ? j.tracks + ' треков' : 'только фон'} · ${j.settings.duration / 3600} ч
     <div class="st-${esc(j.status)}">${esc(j.status)}${j.step && j.status !== 'готово' ? ': ' + esc(j.step) : ''}${j.seconds != null ? ' · ' + Math.round(j.seconds / 60) + ' мин' : ''}</div>
     ${j.status === 'работает' ? `<div class="bar"><i style="width:${Math.round(j.progress * 100)}%"></i></div>` : ''}
     ${j.file ? `<a href="jobs/${j.id}/video?watch=1" target="_blank">Смотреть</a> · <a href="jobs/${j.id}/video">Скачать</a> <span class="muted">${j.size_gb} ГБ</span> · ` : ''}

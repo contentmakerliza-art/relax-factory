@@ -97,6 +97,17 @@ CHUNK_LIMIT = 64 * 1024 * 1024
 KINDS = {"visual", "tracks", "ambient"}
 
 
+MAX_FILE_GB = 20  # the server disk is small and shared
+
+
+def auto_bitrate(resolution: str, hours: float) -> int:
+    """Mbit/s: full quality for usual lengths; long videos (mostly still
+    scenes) get less so the file stays under MAX_FILE_GB."""
+    full = 15 if resolution == "4k" else 8
+    fits = int(MAX_FILE_GB * 8000 / (hours * 3600))
+    return max(4, min(full, fits))
+
+
 def _job_dir(job_id: str) -> Path:
     folder = (DATA / job_id).resolve()
     if folder.parent != DATA.resolve() or not folder.is_dir():
@@ -148,7 +159,7 @@ def start_job(
     find_loop_point: bool = Form(False),
     shuffle: bool = Form(False),
     codec: str = Form("h264"),
-    bitrate: int = Form(15),
+    bitrate: int = Form(0),  # Мбит/с; 0 = auto
     visual_url: str = Form(""),
     tracks_url: str = Form(""),
     tracks_pick: int = Form(0),
@@ -167,12 +178,14 @@ def start_job(
     ambient = None if ambient_url or not amb_dir.is_dir() else next(iter(sorted(amb_dir.iterdir())), None)
     visuals = [] if visual_url else sorted((folder / "visual").iterdir())
     trk = [] if tracks_url else sorted((folder / "tracks").iterdir())
-    if not (visuals or visual_url) or not (trk or tracks_url):
-        raise HTTPException(400, "Нужны картинка или клипы и хотя бы один трек (файлы или ссылка на Google Диск)")
+    if not (visuals or visual_url) or not (trk or tracks_url or ambient or ambient_url):
+        raise HTTPException(400, "Нужны картинка или клипы и треки или фоновый звук (файлы или ссылка на Google Диск)")
     if not tracks_url and tracks_pick and len(trk) > tracks_pick:
         trk = sorted(random.sample(trk, tracks_pick))
     name = visuals[0].stem if visuals else "video"
     w, h = (3840, 2160) if resolution == "4k" else (1920, 1080)
+    if not bitrate:
+        bitrate = auto_bitrate(resolution, hours)
     settings = RenderSettings(
         width=w, height=h, fps=fps, duration=hours * 3600, loop_mode=loop_mode,
         speed=speed, loop_crossfade=loop_crossfade, find_loop_point=find_loop_point, track_crossfade=track_crossfade, shuffle_tracks=shuffle,
