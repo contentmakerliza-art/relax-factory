@@ -36,6 +36,11 @@
     <label>Картинка или клипы <span class="hint">одна картинка PNG/JPG или несколько клипов MP4, идут по очереди</span></label>
     <input type="file" name="visual" accept="image/*,video/*" multiple>
     <input type="url" name="visual_url" placeholder="или ссылка на Google Диск" style="margin-top:6px">
+    <details id="maskbox"><summary>Маска: часть кадра стоит на месте</summary>
+      <p class="hint" style="margin:6px 0">Чёрно-белая картинка: белое двигается (окна, огонь), чёрное всегда как на картинке. Можно добавить и исходную картинку, тогда файл маски назовите mask или маска.</p>
+      <input type="file" name="mask" accept="image/*" multiple>
+      <input type="url" name="mask_url" placeholder="или ссылка на Google Диск" style="margin-top:6px">
+    </details>
     <label>Треки <span class="hint">MP3, можно выбрать сразу все. Можно без треков, если есть фоновый звук</span></label>
     <input type="file" name="tracks" accept="audio/*" multiple>
     <input type="url" name="tracks_url" placeholder="или ссылка на Google Диск" style="margin-top:6px">
@@ -73,12 +78,12 @@ async function call(url, opts) {
 }
 f.addEventListener('submit', async e => {
   e.preventDefault();
-  const vUrl = f.visual_url.value.trim(), tUrl = f.tracks_url.value.trim(), aUrl = f.ambient_url.value.trim();
-  const visual = vUrl ? [] : f.visual.files, tracks = tUrl ? [] : f.tracks.files, ambient = aUrl ? [] : f.ambient.files;
+  const vUrl = f.visual_url.value.trim(), tUrl = f.tracks_url.value.trim(), aUrl = f.ambient_url.value.trim(), mUrl = f.mask_url.value.trim();
+  const visual = vUrl ? [] : f.visual.files, tracks = tUrl ? [] : f.tracks.files, ambient = aUrl ? [] : f.ambient.files, mask = mUrl ? [] : f.mask.files;
   if (!visual.length && !vUrl) { msg.textContent = 'Выберите клипы или вставьте ссылку на Google Диск'; return; }
   if (!tracks.length && !tUrl && !ambient.length && !aUrl) { msg.textContent = 'Выберите треки или фоновый звук (или вставьте ссылку на Google Диск)'; return; }
   const files = [...[...visual].map(x => ['visual', x]), ...[...tracks].map(x => ['tracks', x]),
-                 ...[...ambient].map(x => ['ambient', x])];
+                 ...[...ambient].map(x => ['ambient', x]), ...[...mask].map(x => ['mask', x])];
   const total = files.reduce((n, [, x]) => n + x.size, 0);
   let sent = 0;
   go.disabled = true;
@@ -102,7 +107,7 @@ f.addEventListener('submit', async e => {
       }
     }
     const form = new FormData(f);
-    form.delete('visual'); form.delete('tracks'); form.delete('ambient');
+    form.delete('visual'); form.delete('tracks'); form.delete('ambient'); form.delete('mask');
     await call(`jobs/${id}/start`, { method: 'POST', body: form });
     msg.textContent = 'Добавлено в очередь'; f.reset();
   } catch (err) {

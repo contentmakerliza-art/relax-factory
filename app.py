@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import queue
 import random
+import re
 import secrets
 import shutil
 import threading
@@ -66,6 +67,7 @@ def worker() -> None:
 
 VIDEO_EXTS = {".mp4", ".mov", ".webm", ".mkv"}
 VISUAL_EXTS = VIDEO_EXTS | {".png", ".jpg", ".jpeg", ".webp"}
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
 AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"}
 
 
@@ -73,7 +75,7 @@ def _fetch_from_drive(info: dict, progress) -> None:
     """Download the clips and tracks from Google Drive links straight to the server."""
     job: Job = info["job"]
     folder = job.output.parent
-    visual_url, tracks_url, pick, ambient_url = info["drive"]
+    visual_url, tracks_url, pick, ambient_url, mask_url = info["drive"]
     if visual_url:
         progress("Скачиваю клипы с Google Диска", 0.0)
         found = fetch_folder(visual_url, folder / "visual", VISUAL_EXTS)
@@ -88,13 +90,30 @@ def _fetch_from_drive(info: dict, progress) -> None:
     if ambient_url:
         progress("Скачиваю фоновый звук с Google Диска", 0.0)
         job.ambient = fetch_folder(ambient_url, folder / "ambient", AUDIO_EXTS)[0]
+    if mask_url:
+        progress("Скачиваю маску с Google Диска", 0.0)
+        job.mask, job.still = split_mask(fetch_folder(mask_url, folder / "mask", IMAGE_EXTS))
+
+
+def split_mask(files: list[Path]) -> tuple[Path | None, Path | None]:
+    """The mask field takes the mask and, optionally, the picture the clips
+    were made from: the file named mask/маска is the mask."""
+    if not files:
+        return None, None
+    if len(files) == 1:
+        return files[0], None
+    named = [f for f in files if re.search(r"mask|маск", f.stem, re.I)]
+    if len(named) != 1:
+        raise ValueError("В поле «Маска» назовите файл маски словом mask или маска")
+    rest = [f for f in files if f != named[0]]
+    return named[0], rest[0]
 
 
 threading.Thread(target=worker, daemon=True).start()
 
 
 CHUNK_LIMIT = 64 * 1024 * 1024
-KINDS = {"visual", "tracks", "ambient"}
+KINDS = {"visual", "tracks", "ambient", "mask"}
 
 
 MAX_FILE_GB = 20  # the server disk is small and shared
@@ -167,6 +186,7 @@ def start_job(
     ambient_level: float = Form(-12.0),
     color_drift: str = Form("none"),
     color_period: float = Form(120.0),
+    mask_url: str = Form(""),
 ):
     if not 0 < hours <= 12:
         raise HTTPException(400, "Длина от 0 до 12 часов")
@@ -174,6 +194,12 @@ def start_job(
         raise HTTPException(400, "Задание уже запущено")
     folder = _job_dir(job_id)
     visual_url, tracks_url, ambient_url = visual_url.strip(), tracks_url.strip(), ambient_url.strip()
+    mask_url = mask_url.strip()
+    mask_files = [] if mask_url else sorted((folder / "mask").iterdir()) if (folder / "mask").is_dir() else []
+    try:
+        mask, still = split_mask(mask_files)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     amb_dir = folder / "ambient"
     ambient = None if ambient_url or not amb_dir.is_dir() else next(iter(sorted(amb_dir.iterdir())), None)
     visuals = [] if visual_url else sorted((folder / "visual").iterdir())
@@ -193,10 +219,11 @@ def start_job(
         color_drift=color_drift, color_period=color_period,
     )
     out = folder / f"{name}_{hours:g}h.mp4"
-    jobs[job_id] = {"job": Job(visuals, trk, out, settings, ambient=ambient), "status": "в очереди",
+    jobs[job_id] = {"job": Job(visuals, trk, out, settings, ambient=ambient, mask=mask, still=still),
+                    "status": "в очереди",
                     "step": "", "progress": 0.0, "created": time.time(),
-                    "drive": (visual_url, tracks_url, tracks_pick, ambient_url)
-                    if visual_url or tracks_url or ambient_url else None}
+                    "drive": (visual_url, tracks_url, tracks_pick, ambient_url, mask_url)
+                    if visual_url or tracks_url or ambient_url or mask_url else None}
     work.put(job_id)
     return {"id": job_id}
 
