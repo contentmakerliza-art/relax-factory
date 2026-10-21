@@ -23,6 +23,7 @@
   .st-готово { color:var(--ok); } .st-ошибка { color:var(--err); } .muted { color:var(--muted); font-size:14px; }
   a { color:var(--accent); }
   .thumbs { display:grid; grid-template-columns:repeat(4,1fr); gap:6px; margin:8px 0; } .thumbs img { width:100%; border-radius:6px; display:block; }
+  @media (max-width:520px) { main { padding:16px 12px 40px; } .card { padding:14px; } .wide { grid-column:1 / -1; } }
   textarea { width:100%; margin-top:6px; padding:8px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--text); font:13px/1.4 ui-monospace, monospace; }
 </style>
 </head>
@@ -34,18 +35,18 @@
   <form class="card" id="f">
     <label>Картинка или клипы <span class="hint">одна картинка PNG/JPG или несколько клипов MP4, идут по очереди</span></label>
     <input type="file" name="visual" accept="image/*,video/*" multiple>
-    <input type="url" name="visual_url" placeholder="или ссылка на папку Google Диска с клипами" style="margin-top:6px">
+    <input type="url" name="visual_url" placeholder="или ссылка на Google Диск" style="margin-top:6px">
     <label>Треки <span class="hint">MP3, можно выбрать сразу все</span></label>
     <input type="file" name="tracks" accept="audio/*" multiple>
-    <input type="url" name="tracks_url" placeholder="или ссылка на папку Google Диска с треками" style="margin-top:6px">
+    <input type="url" name="tracks_url" placeholder="или ссылка на Google Диск" style="margin-top:6px">
     <label>Фоновый звук <span class="hint">необязательно: вода, дождь, камин. Тихо идёт под музыкой</span></label>
     <input type="file" name="ambient" accept="audio/*">
-    <input type="url" name="ambient_url" placeholder="или ссылка на файл или папку Google Диска" style="margin-top:6px">
-    <p class="hint" style="margin:6px 0 0">Ссылка на Диск быстрее загрузки. Доступ к папке: «Все, у кого есть ссылка».</p>
+    <input type="url" name="ambient_url" placeholder="или ссылка на Google Диск" style="margin-top:6px">
+    <p class="hint" style="margin:6px 0 0">Ссылка на Диск быстрее загрузки, особенно с телефона. Доступ к папке: «Все, у кого есть ссылка».</p>
     <div class="row">
       <div><label>Длина, часов</label><input type="number" name="hours" value="3" min="0.1" max="12" step="any"></div>
       <div><label>Качество</label><select name="resolution"><option value="4k">4K</option><option value="1080p">1080p</option></select></div>
-      <div><label>Петля клипа</label><select name="loop_mode"><option value="crossfade">Плавная склейка</option><option value="scenes">Сцены (A1, A2 — одна сцена, B1 — следующая)</option><option value="chain">Цепочка</option><option value="pingpong">Вперёд-назад</option></select></div>
+      <div class="wide"><label>Петля клипа</label><select name="loop_mode"><option value="crossfade">Плавная склейка</option><option value="scenes">Сцены (A1, A2 — одна сцена, B1 — следующая)</option><option value="chain">Цепочка</option><option value="pingpong">Вперёд-назад</option></select></div>
     </div>
     <details>
       <summary>Дополнительно</summary>
@@ -111,16 +112,20 @@ f.addEventListener('submit', async e => {
 });
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 async function del(id) { if (confirm('Удалить видео и файлы?')) { await fetch('jobs/' + id, {method:'DELETE'}); load(); } }
+let lastJobs = '';
 async function load() {
   const r = await fetch('jobs'); if (!r.ok) return;
-  const rows = await r.json(), box = document.getElementById('jobs');
+  const text = await r.text(), box = document.getElementById('jobs');
+  if (text === lastJobs) return;  // redraw only on change: keeps opened frames open, no image re-requests
+  lastJobs = text;
+  const rows = JSON.parse(text);
   if (!rows.length) { box.textContent = 'Пока пусто'; return; }
   box.innerHTML = rows.map(j => `<div class="job">
     <b>${esc(j.visual)}</b> · ${j.tracks} треков · ${j.settings.duration / 3600} ч
     <div class="st-${esc(j.status)}">${esc(j.status)}${j.step && j.status !== 'готово' ? ': ' + esc(j.step) : ''}${j.seconds != null ? ' · ' + Math.round(j.seconds / 60) + ' мин' : ''}</div>
     ${j.status === 'работает' ? `<div class="bar"><i style="width:${Math.round(j.progress * 100)}%"></i></div>` : ''}
     ${j.file ? `<a href="jobs/${j.id}/video?watch=1" target="_blank">Смотреть</a> · <a href="jobs/${j.id}/video">Скачать</a> <span class="muted">${j.size_gb} ГБ</span> · ` : ''}
-    ${j.previews ? `<div class="thumbs">${[...Array(j.previews)].map((_, i) => `<a href="jobs/${j.id}/preview/${i + 1}?download=1" title="Скачать превью"><img src="jobs/${j.id}/preview/${i + 1}" alt="Превью ${i + 1}"></a>`).join('')}</div>` : ''}
+    ${j.previews ? `<details><summary>Кадры для обложки</summary><div class="thumbs">${[...Array(j.previews)].map((_, i) => `<a href="jobs/${j.id}/preview/${i + 1}?download=1" title="Скачать превью"><img src="jobs/${j.id}/preview/${i + 1}" alt="Превью ${i + 1}" loading="lazy"></a>`).join('')}</div></details>` : ''}
     ${j.timecodes ? `<details><summary>Таймкоды для описания</summary><textarea readonly rows="8">${esc(j.timecodes)}</textarea><a href="#" onclick="navigator.clipboard.writeText(this.previousElementSibling.value);this.textContent='Скопировано';return false">Скопировать</a></details>` : ''}
     ${j.status !== 'работает' ? `<a href="#" onclick="del('${j.id}');return false">Удалить</a>` : ''}
   </div>`).join('');
