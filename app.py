@@ -154,6 +154,8 @@ def start_job(
     tracks_pick: int = Form(0),
     ambient_url: str = Form(""),
     ambient_level: float = Form(-12.0),
+    color_drift: str = Form("none"),
+    color_period: float = Form(120.0),
 ):
     if not 0 < hours <= 12:
         raise HTTPException(400, "Длина от 0 до 12 часов")
@@ -175,6 +177,7 @@ def start_job(
         width=w, height=h, fps=fps, duration=hours * 3600, loop_mode=loop_mode,
         speed=speed, loop_crossfade=loop_crossfade, find_loop_point=find_loop_point, track_crossfade=track_crossfade, shuffle_tracks=shuffle,
         codec=codec, video_bitrate=f"{bitrate}M", ambient_level=ambient_level,
+        color_drift=color_drift, color_period=color_period,
     )
     out = folder / f"{name}_{hours:g}h.mp4"
     jobs[job_id] = {"job": Job(visuals, trk, out, settings, ambient=ambient), "status": "в очереди",
