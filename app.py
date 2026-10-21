@@ -73,7 +73,7 @@ def _fetch_from_drive(info: dict, progress) -> None:
     """Download the clips and tracks from Google Drive links straight to the server."""
     job: Job = info["job"]
     folder = job.output.parent
-    visual_url, tracks_url, pick = info["drive"]
+    visual_url, tracks_url, pick, ambient_url = info["drive"]
     if visual_url:
         progress("Скачиваю клипы с Google Диска", 0.0)
         found = fetch_folder(visual_url, folder / "visual", VISUAL_EXTS)
@@ -85,13 +85,16 @@ def _fetch_from_drive(info: dict, progress) -> None:
         job.tracks = fetch_folder(tracks_url, folder / "tracks", AUDIO_EXTS)
     if pick and len(job.tracks) > pick:
         job.tracks = sorted(random.sample(job.tracks, pick))
+    if ambient_url:
+        progress("Скачиваю фоновый звук с Google Диска", 0.0)
+        job.ambient = fetch_folder(ambient_url, folder / "ambient", AUDIO_EXTS)[0]
 
 
 threading.Thread(target=worker, daemon=True).start()
 
 
 CHUNK_LIMIT = 64 * 1024 * 1024
-KINDS = {"visual", "tracks"}
+KINDS = {"visual", "tracks", "ambient"}
 
 
 def _job_dir(job_id: str) -> Path:
@@ -149,13 +152,17 @@ def start_job(
     visual_url: str = Form(""),
     tracks_url: str = Form(""),
     tracks_pick: int = Form(0),
+    ambient_url: str = Form(""),
+    ambient_level: float = Form(-12.0),
 ):
     if not 0 < hours <= 12:
         raise HTTPException(400, "Длина от 0 до 12 часов")
     if job_id in jobs:
         raise HTTPException(400, "Задание уже запущено")
     folder = _job_dir(job_id)
-    visual_url, tracks_url = visual_url.strip(), tracks_url.strip()
+    visual_url, tracks_url, ambient_url = visual_url.strip(), tracks_url.strip(), ambient_url.strip()
+    amb_dir = folder / "ambient"
+    ambient = None if ambient_url or not amb_dir.is_dir() else next(iter(sorted(amb_dir.iterdir())), None)
     visuals = [] if visual_url else sorted((folder / "visual").iterdir())
     trk = [] if tracks_url else sorted((folder / "tracks").iterdir())
     if not (visuals or visual_url) or not (trk or tracks_url):
@@ -167,12 +174,13 @@ def start_job(
     settings = RenderSettings(
         width=w, height=h, fps=fps, duration=hours * 3600, loop_mode=loop_mode,
         speed=speed, loop_crossfade=loop_crossfade, find_loop_point=find_loop_point, track_crossfade=track_crossfade, shuffle_tracks=shuffle,
-        codec=codec, video_bitrate=f"{bitrate}M",
+        codec=codec, video_bitrate=f"{bitrate}M", ambient_level=ambient_level,
     )
     out = folder / f"{name}_{hours:g}h.mp4"
-    jobs[job_id] = {"job": Job(visuals, trk, out, settings), "status": "в очереди",
+    jobs[job_id] = {"job": Job(visuals, trk, out, settings, ambient=ambient), "status": "в очереди",
                     "step": "", "progress": 0.0, "created": time.time(),
-                    "drive": (visual_url, tracks_url, tracks_pick) if visual_url or tracks_url else None}
+                    "drive": (visual_url, tracks_url, tracks_pick, ambient_url)
+                    if visual_url or tracks_url or ambient_url else None}
     work.put(job_id)
     return {"id": job_id}
 
@@ -190,6 +198,8 @@ def list_jobs():
             "tracks": len(job.tracks),
             "file": job.output.name if info["status"] == "готово" else None,
             "size_gb": round(job.output.stat().st_size / 1e9, 2) if job.output.exists() and info["status"] == "готово" else None,
+            "previews": len(job.previews) if info["status"] == "готово" else 0,
+            "timecodes": job.timecodes if info["status"] == "готово" else "",
             "settings": asdict(job.settings),
         })
     return rows
@@ -204,6 +214,16 @@ def download(job_id: str, watch: bool = False):
     out: Path = info["job"].output
     return FileResponse(out, filename=out.name, media_type="video/mp4",
                         content_disposition_type="inline" if watch else "attachment")
+
+
+@app.get("/jobs/{job_id}/preview/{n}", dependencies=[Depends(check)])
+def preview(job_id: str, n: int, download: bool = False):
+    info = jobs.get(job_id)
+    if not info or not 1 <= n <= len(info["job"].previews):
+        raise HTTPException(404)
+    p: Path = info["job"].previews[n - 1]
+    return FileResponse(p, filename=p.name, media_type="image/jpeg",
+                        content_disposition_type="attachment" if download else "inline")
 
 
 @app.delete("/jobs/{job_id}", dependencies=[Depends(check)])
