@@ -7,6 +7,7 @@ same as rendering the loop itself plus encoding the audio.
 
 from __future__ import annotations
 
+import functools
 import json
 import math
 import random
@@ -33,6 +34,7 @@ class RenderSettings:
     saturation: float = 1.0
     color_drift: str = "none"           # none | soft (blue ± 40°) | full (all colours): slow change of tint
     color_period: float = 120.0         # seconds for one full round of the tint
+    stabilize: bool = True              # remove the clip's own micro-shake (Veo jitters by ~0.2-1 px)
     image_segment: float = 10.0         # length of the still-image segment
     track_crossfade: float = 3.0        # seconds between tracks
     shuffle_tracks: bool = False        # reshuffle each pass over the album
@@ -128,10 +130,24 @@ def _image_segment(src: Path, dst: Path, s: RenderSettings) -> None:
           "-vf", _frame_filter(s), "-an", *_video_codec_args(s), str(dst)])
 
 
+@functools.cache
+def _has_vidstab() -> bool:
+    out = subprocess.run(["ffmpeg", "-hide_banner", "-filters"], capture_output=True, text=True).stdout
+    return "vidstabdetect" in out
+
+
 def _normalized_clip(src: Path, dst: Path, s: RenderSettings, skip_first: bool = False) -> float:
     # skip_first: a chained clip starts on the previous clip's last frame; drop the repeat
-    vf = ("trim=start_frame=1,setpts=PTS-STARTPTS," if skip_first else "") + _frame_filter(s)
-    _run(["ffmpeg", "-y", "-i", str(src), "-vf", vf, "-an",
+    head = "trim=start_frame=1,setpts=PTS-STARTPTS," if skip_first else ""
+    stab = ""
+    if s.stabilize and _has_vidstab():
+        # tripod: every frame is held to the first one, as if on a tripod;
+        # zoom 1% hides the edges the small shifts uncover
+        trf = dst.with_suffix(".trf")
+        _run(["ffmpeg", "-y", "-i", str(src), "-vf",
+              f"{head}vidstabdetect=shakiness=3:accuracy=15:tripod=1:result={trf}", "-f", "null", "-"])
+        stab = f"vidstabtransform=input={trf}:tripod=1:interpol=bicubic:crop=keep:optzoom=0:zoom=1,"
+    _run(["ffmpeg", "-y", "-i", str(src), "-vf", head + stab + _frame_filter(s), "-an",
           *_work_codec_args(s), str(dst)])
     return probe_duration(dst)
 
@@ -590,7 +606,23 @@ def make_previews(seg: Path, seg_len: float, output: Path, count: int = 4) -> li
     return out
 
 
+def source_fps(visuals: list[Path]) -> int:
+    """Frame rate of the first clip (30 for a picture). Keeping it avoids
+    the uneven 2-3 repeat of frames that 24 -> 60 fps gives (judder)."""
+    clips = [v for v in visuals if v.suffix.lower() not in IMAGE_EXTS]
+    if not clips:
+        return 30
+    rate = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                           "stream=r_frame_rate", "-of", "csv=p=0", str(clips[0])],
+                          capture_output=True, text=True).stdout.strip() or "30"
+    num, _, den = rate.partition("/")
+    fps = round(float(num) / float(den or 1))
+    return min(max(fps, 15), 60)
+
+
 def render(job: Job, progress: Progress | None = None) -> Path:
+    if not job.settings.fps:  # 0 = same as the clips
+        job.settings = replace(job.settings, fps=source_fps(job.visuals))
     s = job.settings
     say = progress or (lambda msg, frac: None)
     if not job.tracks and not job.ambient:
