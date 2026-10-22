@@ -18,6 +18,9 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable
 
+from render import breathing
+from render.breathing import Breath
+
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 
 
@@ -55,6 +58,8 @@ class Job:
     ambient: Path | None = None         # background sound mixed under the music
     mask: Path | None = None            # black/white picture: white moves, black stays still
     still: Path | None = None           # the still picture under the mask (default: first frame)
+    voice: Path | None = None           # breathing intro voice: intro + black screen instead of a loop
+    breath: Breath = field(default_factory=Breath)
     previews: list[Path] = field(default_factory=list)   # filled by render()
     timecodes: str = ""                 # filled by render(): track list for the description
 
@@ -426,7 +431,8 @@ def _ambient_cycle(src: Path, dst: Path, n: int, s: RenderSettings, tmp: Path,
     _blend_cycle(longer, dst, xa, n)
 
 
-def build_ambient_only(ambient: Path, dst: Path, s: RenderSettings, tmp: Path) -> str:
+def build_ambient_only(ambient: Path, dst: Path, s: RenderSettings, tmp: Path,
+                       voice: Path | None = None) -> str:
     """No music: the background sound alone, at full loudness, as a seamless
     cycle of whole AAC frames (at least 10 minutes, so the blend is rare)."""
     sr, frame = 48000, 1024
@@ -439,8 +445,22 @@ def build_ambient_only(ambient: Path, dst: Path, s: RenderSettings, tmp: Path) -
           "-ac", "2", "-ar", str(sr), "-c:a", "pcm_s16le", str(limited)])
     n = max(_samples(limited), 600 * sr) // frame * frame
     cycle = tmp / "ambient_only_cycle.wav"
+    head = None
+    if voice:
+        # the voice must fit in the first cycle with its fade
+        vo = tmp / "voice.wav"
+        gain = s.loudness - 2 - measure_loudness(voice)
+        _run(["ffmpeg", "-y", "-i", str(voice), "-af",
+              f"volume={gain:.2f}dB,alimiter=limit=0.5:level=disabled:latency=1",
+              "-ac", "2", "-ar", str(sr), "-c:a", "pcm_s16le", str(vo)])
+        need = (_samples(vo) + (breathing.FADE + 5) * sr) // frame * frame + frame
+        n = max(n, int(need))
+    cycle = tmp / "ambient_only_cycle.wav"
     _ambient_cycle(limited, cycle, n, s, tmp, level=0.0)
-    encode_seamless_aac(cycle, dst, s.duration, s.audio_bitrate, tmp)
+    if voice:
+        head = tmp / "ambient_head.wav"
+        breathing.head_block(cycle, vo, head, _samples(vo) / sr, _run)
+    encode_seamless_aac(cycle, dst, s.duration, s.audio_bitrate, tmp, head)
     return ""
 
 
@@ -558,7 +578,26 @@ def _adts_frames(data: bytes) -> list[tuple[int, int]]:
     return frames
 
 
-def encode_seamless_aac(cycle: Path, dst: Path, duration: float, bitrate: str, tmp: Path) -> None:
+def _slice_frames(src: Path, n: int, before: tuple[str, list[str]], after: str, bitrate: str, tmp: Path,
+                  name: str) -> bytes:
+    """AAC packets covering exactly `n` samples of `src`, encoded with 4096
+    samples of the given neighbouring audio on each side (filter labels)."""
+    frame, pad = 1024, 4096
+    padded = tmp / f"{name}_padded.aac"
+    _run(["ffmpeg", "-y", "-i", str(src), "-i", str(src), "-i", str(src), *before[1],
+          "-filter_complex", f"{before[0]}{after};[t][1:a][h]concat=n=3:v=0:a=1[a]",
+          "-map", "[a]", "-c:a", "aac", "-b:a", bitrate, "-f", "adts", str(padded)])
+    data = padded.read_bytes()
+    frames = _adts_frames(data)
+    first = (pad + frame) // frame   # the encoder adds one frame of delay in front
+    count = n // frame
+    if first + count > len(frames):
+        raise RuntimeError("AAC: не хватило кадров")
+    return data[frames[first][0]:frames[first + count - 1][0] + frames[first + count - 1][1]]
+
+
+def encode_seamless_aac(cycle: Path, dst: Path, duration: float, bitrate: str, tmp: Path,
+                        head: Path | None = None) -> None:
     """Encode one cycle (a whole number of 1024-sample frames) so that its
     packets can be repeated back to back without a gap or click.
 
@@ -566,28 +605,24 @@ def encode_seamless_aac(cycle: Path, dst: Path, duration: float, bitrate: str, t
     start behind, then exactly the packets that cover the cycle are cut out:
     each boundary packet was encoded with the real neighbouring audio, so
     repeating them sounds the same as encoding the whole long track."""
-    frame, pad = 1024, 4096          # pad: whole frames of context on each side
+    # `head` (optional, same length as the cycle) plays once first: silence
+    # before it, the cycle after it
+    pad = 4096
     n = _samples(cycle)
-    padded = tmp / "cycle_padded.aac"
-    _run(["ffmpeg", "-y", "-i", str(cycle), "-i", str(cycle), "-i", str(cycle), "-filter_complex",
-          f"[0:a]atrim=start_sample={n - pad},asetpts=PTS-STARTPTS[t];"
-          f"[2:a]atrim=end_sample={pad},asetpts=PTS-STARTPTS[h];"
-          f"[t][1:a][h]concat=n=3:v=0:a=1[a]",
-          "-map", "[a]", "-c:a", "aac", "-b:a", bitrate, "-f", "adts", str(padded)])
-    data = padded.read_bytes()
-    frames = _adts_frames(data)
-    # the encoder adds one frame of delay in front of everything
-    first = (pad + frame) // frame
-    count = n // frame
-    if first + count > len(frames):
-        raise RuntimeError("AAC: не хватило кадров")
-    start = frames[first][0]
-    end = frames[first + count - 1][0] + frames[first + count - 1][1]
-    chunk = data[start:end]
+    cycle_head = f";[2:a]atrim=end_sample={pad},asetpts=PTS-STARTPTS[h]"
+    chunk = _slice_frames(cycle, n, (f"[0:a]atrim=start_sample={n - pad},asetpts=PTS-STARTPTS[t]", []),
+                          cycle_head, bitrate, tmp, "cycle")
+    first_chunk = b""
+    if head:
+        first_chunk = _slice_frames(
+            head, n, (f"[3:a]atrim=end_sample={pad}[t]",
+                      ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-i", str(cycle)]),
+            f";[4:a]atrim=end_sample={pad},asetpts=PTS-STARTPTS[h]", bitrate, tmp, "head")
 
     repeats = math.ceil(duration * 48000 / n) + 1
     raw = tmp / "audio_full.aac"
     with raw.open("wb") as f:
+        f.write(first_chunk)
         for _ in range(repeats):
             f.write(chunk)
     _run(["ffmpeg", "-y", "-i", str(raw), "-c", "copy", "-t", str(duration), str(dst)])
@@ -620,6 +655,31 @@ def source_fps(visuals: list[Path]) -> int:
     return min(max(fps, 15), 60)
 
 
+def _render_breathing(job: Job, s: RenderSettings, say: Progress, tmp: Path) -> Path:
+    if not job.ambient:
+        raise ValueError("Для вступления с дыханием нужен фоновый звук")
+    say("Рисую вступление с дыханием", 0.05)
+    intro, black = tmp / "intro.mp4", tmp / "black.mp4"
+    codec = _video_codec_args(s)
+    intro_len = breathing.intro_video(intro, probe_duration(job.voice), job.breath,
+                                      s.width, s.height, s.fps, codec, _run)
+    breathing.black_video(black, s.width, s.height, s.fps, codec, _run)
+    job.previews = make_previews(intro, intro_len, job.output)
+
+    say("Собираю звук", 0.4)
+    audio = tmp / "audio.m4a"
+    build_ambient_only(job.ambient, audio, s, tmp, job.voice)
+    job.timecodes = ""
+
+    say("Склеиваю видео до нужной длины", 0.8)
+    lst = tmp / "repeat.txt"
+    lst.write_text(f"file '{intro}'\n" + f"file '{black}'\n" * (math.ceil(s.duration / 10) + 1))
+    _run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(lst), "-i", str(audio),
+          "-map", "0:v", "-map", "1:a", "-c", "copy", "-t", str(s.duration), str(job.output)])
+    say("Готово", 1.0)
+    return job.output
+
+
 def render(job: Job, progress: Progress | None = None) -> Path:
     if not job.settings.fps:  # 0 = same as the clips
         job.settings = replace(job.settings, fps=source_fps(job.visuals))
@@ -630,6 +690,8 @@ def render(job: Job, progress: Progress | None = None) -> Path:
     job.output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="render_") as td:
         tmp = Path(td)
+        if job.voice:
+            return _render_breathing(job, s, say, tmp)
         say("Готовлю петлю видео", 0.05)
         seg = tmp / "loop.mp4"
         seg_len = build_loop_segment(job.visuals, seg, s, tmp, job.mask, job.still)

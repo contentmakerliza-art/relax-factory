@@ -41,6 +41,18 @@
       <input type="file" name="mask" accept="image/*" multiple>
       <input type="url" name="mask_url" placeholder="или ссылка на Google Диск" style="margin-top:6px">
     </details>
+    <details><summary>Вступление с дыханием + чёрный экран (для сна)</summary>
+      <p class="hint" style="margin:6px 0">Голос ведёт дыхание, круг растёт на вдохе и сжимается на выдохе, потом гаснет, и до конца идёт чёрный экран с фоновым звуком. Клипы не нужны, нужен фоновый звук.</p>
+      <label>Голос <span class="hint">MP3 или WAV</span></label>
+      <input type="file" name="voice" accept="audio/*">
+      <input type="url" name="voice_url" placeholder="или ссылка на Google Диск" style="margin-top:6px">
+      <div class="row">
+        <div><label>Первый вдох, сек</label><input type="number" name="breath_start" value="16" min="0" max="120" step="any"></div>
+        <div><label>Вдох, сек</label><input type="number" name="breath_in" value="4" min="1" max="20" step="any"></div>
+        <div><label>Выдох, сек</label><input type="number" name="breath_out" value="6" min="1" max="20" step="any"></div>
+        <div><label>Циклов с подписями</label><input type="number" name="breath_cycles" value="9" min="0" max="60"></div>
+      </div>
+    </details>
     <label>Треки <span class="hint">MP3, можно выбрать сразу все. Можно без треков, если есть фоновый звук</span></label>
     <input type="file" name="tracks" accept="audio/*" multiple>
     <input type="url" name="tracks_url" placeholder="или ссылка на Google Диск" style="margin-top:6px">
@@ -79,12 +91,12 @@ async function call(url, opts) {
 }
 f.addEventListener('submit', async e => {
   e.preventDefault();
-  const vUrl = f.visual_url.value.trim(), tUrl = f.tracks_url.value.trim(), aUrl = f.ambient_url.value.trim(), mUrl = f.mask_url.value.trim();
-  const visual = vUrl ? [] : f.visual.files, tracks = tUrl ? [] : f.tracks.files, ambient = aUrl ? [] : f.ambient.files, mask = mUrl ? [] : f.mask.files;
-  if (!visual.length && !vUrl) { msg.textContent = 'Выберите клипы или вставьте ссылку на Google Диск'; return; }
+  const vUrl = f.visual_url.value.trim(), tUrl = f.tracks_url.value.trim(), aUrl = f.ambient_url.value.trim(), mUrl = f.mask_url.value.trim(), oUrl = f.voice_url.value.trim();
+  const visual = vUrl ? [] : f.visual.files, tracks = tUrl ? [] : f.tracks.files, ambient = aUrl ? [] : f.ambient.files, mask = mUrl ? [] : f.mask.files, voice = oUrl ? [] : f.voice.files;
+  if (!visual.length && !vUrl && !voice.length && !oUrl) { msg.textContent = 'Выберите клипы или вставьте ссылку на Google Диск'; return; }
   if (!tracks.length && !tUrl && !ambient.length && !aUrl) { msg.textContent = 'Выберите треки или фоновый звук (или вставьте ссылку на Google Диск)'; return; }
   const files = [...[...visual].map(x => ['visual', x]), ...[...tracks].map(x => ['tracks', x]),
-                 ...[...ambient].map(x => ['ambient', x]), ...[...mask].map(x => ['mask', x])];
+                 ...[...ambient].map(x => ['ambient', x]), ...[...mask].map(x => ['mask', x]), ...[...voice].map(x => ['voice', x])];
   const total = files.reduce((n, [, x]) => n + x.size, 0);
   let sent = 0;
   go.disabled = true;
@@ -108,7 +120,7 @@ f.addEventListener('submit', async e => {
       }
     }
     const form = new FormData(f);
-    form.delete('visual'); form.delete('tracks'); form.delete('ambient'); form.delete('mask');
+    form.delete('visual'); form.delete('tracks'); form.delete('ambient'); form.delete('mask'); form.delete('voice');
     await call(`jobs/${id}/start`, { method: 'POST', body: form });
     msg.textContent = 'Добавлено в очередь'; f.reset();
   } catch (err) {
