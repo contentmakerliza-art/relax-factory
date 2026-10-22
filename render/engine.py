@@ -11,6 +11,7 @@ import functools
 import json
 import math
 import random
+import shutil
 import re
 import subprocess
 import tempfile
@@ -746,6 +747,8 @@ def _render_breathing(job: Job, s: RenderSettings, say: Progress, tmp: Path) -> 
     say("Раскладываю голос по дыханию", 0.03)
     job.voice, job.breath, job.warning = breathing.arrange_voice(
         job.voice, job.breath, tmp / "voice_timed.wav", _run)
+    if (timing := tmp / "voice_timed.txt").exists():
+        shutil.copy(timing, job.output.with_name("voice-timing.txt"))
     say("Рисую вступление с дыханием", 0.05)
     intro, black = tmp / "intro.mp4", tmp / "black.mp4"
     codec = _video_codec_args(s)

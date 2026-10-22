@@ -407,6 +407,15 @@ def preview(job_id: str, n: int, download: bool = False):
                         content_disposition_type="attachment" if download else "inline")
 
 
+@app.get("/jobs/{job_id}/voice-timing", dependencies=[Depends(check)])
+def voice_timing(job_id: str):
+    """Where each line of the voice was found and placed (breathing intro)."""
+    f = _job_dir(job_id) / "voice-timing.txt"
+    if not f.exists():
+        raise HTTPException(404, "Нет разметки голоса")
+    return FileResponse(f, media_type="text/plain; charset=utf-8")
+
+
 @app.delete("/jobs/{job_id}", dependencies=[Depends(check)])
 def delete(job_id: str):
     info = jobs.get(job_id)
