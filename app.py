@@ -89,7 +89,7 @@ def _fetch_from_drive(info: dict, progress) -> None:
         job.tracks = sorted(random.sample(job.tracks, pick))
     if ambient_url:
         progress("Скачиваю фоновый звук с Google Диска", 0.0)
-        job.ambient = fetch_folder(ambient_url, folder / "ambient", AUDIO_EXTS)[0]
+        job.ambient = fetch_folder(ambient_url, folder / "ambient", AUDIO_EXTS)[:5]
     if voice_url:
         progress("Скачиваю голос с Google Диска", 0.0)
         job.voice = fetch_folder(voice_url, folder / "voice", AUDIO_EXTS)[0]
@@ -217,7 +217,7 @@ def start_job(
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     amb_dir = folder / "ambient"
-    ambient = None if ambient_url or not amb_dir.is_dir() else next(iter(sorted(amb_dir.iterdir())), None)
+    ambient = [] if ambient_url or not amb_dir.is_dir() else sorted(amb_dir.iterdir())[:5]
     if breathing and not (ambient or ambient_url):
         raise HTTPException(400, "Для вступления с дыханием нужен фоновый звук (дождь, волны)")
     visuals = [] if visual_url else sorted((folder / "visual").iterdir())

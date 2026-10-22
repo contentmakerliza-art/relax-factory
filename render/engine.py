@@ -57,7 +57,7 @@ class Job:
     tracks: list[Path]
     output: Path
     settings: RenderSettings = field(default_factory=RenderSettings)
-    ambient: Path | None = None         # background sound mixed under the music
+    ambient: Path | list[Path] | None = None   # background sound (or 2-5 layers mixed) under the music
     mask: Path | None = None            # black/white picture: white moves, black stays still
     still: Path | None = None           # the still picture under the mask (default: first frame)
     voice: Path | None = None           # breathing intro voice: intro + black screen instead of a loop
@@ -461,6 +461,51 @@ def _ambient_cycle(src: Path, dst: Path, n: int, s: RenderSettings, tmp: Path,
     _blend_cycle(longer, dst, xa, n)
 
 
+def _layer_db(p: Path) -> float:
+    """Per-layer volume from the file name: «капли -6dB.mp3» is 6 dB quieter."""
+    m = re.search(r"([+-]\d+(?:[.,]\d+)?)\s*d[bб]", p.stem, re.I)
+    return float(m.group(1).replace(",", ".")) if m else 0.0
+
+
+def premix_layers(layers: list[Path], dst: Path, s: RenderSettings, tmp: Path) -> Path:
+    """Several short sounds (roof rain, window rain, drips) into one long
+    background: each loops seamlessly at its own length, starts at a random
+    point, so the mix only repeats after 10 minutes."""
+    sr, frame = 48000, 1024
+    rng = random.Random(s.seed)
+    length = max(max(probe_duration(p) for p in layers), 600.0)
+    n = int(length * sr) // frame * frame
+    parts = []
+    for i, p in enumerate(layers):
+        sub = tmp / f"layer_{i}"
+        sub.mkdir(exist_ok=True)
+        cyc = sub / "cycle.wav"
+        _ambient_cycle(p, cyc, n, s, sub, level=_layer_db(p))
+        k = rng.randrange(n // frame) * frame  # random start, still seamless: the cycle wraps
+        rot = sub / "rotated.wav"
+        _run(["ffmpeg", "-y", "-i", str(cyc), "-i", str(cyc), "-filter_complex",
+              f"[0:a]atrim=start_sample={k},asetpts=PTS-STARTPTS[a];"
+              f"[1:a]atrim=end_sample={k},asetpts=PTS-STARTPTS[b];[a][b]concat=n=2:v=0:a=1[o]",
+              "-map", "[o]", "-c:a", "pcm_s16le", str(rot)])
+        parts.append(rot)
+    inputs = [x for p in parts for x in ("-i", str(p))]
+    mixed = tmp / "layers_mixed.wav"
+    _run(["ffmpeg", "-y", *inputs, "-filter_complex",
+          f"amix=inputs={len(parts)}:normalize=0:duration=first", "-c:a", "pcm_s16le", str(mixed)])
+    gain = s.loudness - measure_loudness(mixed)
+    _run(["ffmpeg", "-y", "-i", str(mixed), "-af",
+          f"volume={gain:.2f}dB,alimiter=limit=0.89:level=disabled:latency=1",
+          "-c:a", "pcm_s16le", str(dst)])
+    return dst
+
+
+def _ambient_source(job: "Job", s: RenderSettings, tmp: Path) -> Path | None:
+    layers = job.ambient if isinstance(job.ambient, list) else [job.ambient] if job.ambient else []
+    if len(layers) <= 1:
+        return layers[0] if layers else None
+    return premix_layers(layers, tmp / "layers.wav", s, tmp)
+
+
 def build_ambient_only(ambient: Path, dst: Path, s: RenderSettings, tmp: Path,
                        voice: Path | None = None) -> str:
     """No music: the background sound alone, at full loudness, as a seamless
@@ -698,7 +743,7 @@ def _render_breathing(job: Job, s: RenderSettings, say: Progress, tmp: Path) -> 
 
     say("Собираю звук", 0.4)
     audio = tmp / "audio.m4a"
-    build_ambient_only(job.ambient, audio, s, tmp, job.voice)
+    build_ambient_only(_ambient_source(job, s, tmp), audio, s, tmp, job.voice)
     job.timecodes = ""
 
     say("Склеиваю видео до нужной длины", 0.8)
@@ -731,10 +776,11 @@ def render(job: Job, progress: Progress | None = None) -> Path:
 
         say("Собираю и выравниваю звук", 0.35)
         audio = tmp / "audio.m4a"
+        ambient = _ambient_source(job, s, tmp)
         if job.tracks:
-            job.timecodes = build_audio(job.tracks, audio, s, tmp, job.ambient)
+            job.timecodes = build_audio(job.tracks, audio, s, tmp, ambient)
         else:
-            job.timecodes = build_ambient_only(job.ambient, audio, s, tmp)
+            job.timecodes = build_ambient_only(ambient, audio, s, tmp)
         job.output.with_suffix(".txt").write_text(job.timecodes + "\n", encoding="utf-8")
 
         say("Склеиваю видео до нужной длины", 0.8)
