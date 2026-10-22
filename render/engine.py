@@ -20,6 +20,7 @@ from typing import Callable
 
 from render import breathing
 from render.breathing import Breath
+from render.zoomfix import zoom_filter
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 
@@ -39,6 +40,7 @@ class RenderSettings:
     color_period: float = 120.0         # seconds for one full round of the tint
     stabilize: bool = True              # remove the clip's own micro-shake (Veo jitters by ~0.2-1 px)
     smooth: bool = False                # calm AI "boiling" of still textures, keep snow and fire
+    mask_mode: str = "still"            # still: black part shows the picture | stab: mask only guides stabilization
     stab_mask: str = ""                 # set from the mask: its white (moving) part is ignored by stabilization
     image_segment: float = 10.0         # length of the still-image segment
     track_crossfade: float = 3.0        # seconds between tracks
@@ -145,25 +147,24 @@ def _has_vidstab() -> bool:
 
 def _stab_detect(src: Path, head: str, trf: Path, s: RenderSettings) -> None:
     """Find the camera shake. With a mask, the moving parts (snow, flames) are
-    covered with a still frame first: otherwise snow drifting one way is taken
-    for the camera moving and the whole picture is shifted to follow it."""
+    covered with a heavy blur of the frame first: otherwise snow drifting one way is taken for the
+    camera moving and the whole picture is shifted to follow it. A blur, not a
+    still frame or a flat fill: those make hard static edges that vote for
+    "no motion" and hide the real shake and drift."""
     detect = f"vidstabdetect=shakiness=3:accuracy=15:tripod=1:result={trf}"
     if not s.stab_mask:
         _run(["ffmpeg", "-y", "-i", str(src), "-vf", head + detect, "-f", "null", "-"])
         return
-    still = trf.with_suffix(".still.png")
-    _run(["ffmpeg", "-y", "-i", str(src), "-vf", head.rstrip(",") or "null", "-frames:v", "1", str(still)])
-    # the still and the mask must come at the clip's exact frame rate, or the
-    # detector sees extra frames and its shifts no longer match the clip
+    # the mask must come at the clip's exact frame rate, or the detector sees
+    # extra frames and its shifts no longer match the clip
     rate = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
                            "stream=r_frame_rate", "-of", "csv=p=0", str(src)],
                           capture_output=True, text=True).stdout.strip() or "30"
-    fr = ["-loop", "1", "-framerate", rate]
-    _run(["ffmpeg", "-y", "-i", str(src), *fr, "-i", str(still), *fr, "-i", s.stab_mask,
+    _run(["ffmpeg", "-y", "-i", str(src), "-loop", "1", "-framerate", rate, "-i", s.stab_mask,
           "-filter_complex",
-          f"[0:v]{head}format=gray[a];[1:v]format=gray[b];"
-          "[2:v][a]scale2ref=flags=bilinear[m][a2];[m]format=gray,gblur=sigma=4[m2];"
-          f"[a2][b][m2]maskedmerge,format=yuv420p,{detect}",
+          f"[0:v]{head}format=gray,split[a][g];[g]gblur=sigma=40[flat];"
+          "[1:v][a]scale2ref=flags=bilinear[m][a2];[m]format=gray,gblur=sigma=4[m2];"
+          f"[a2][flat][m2]maskedmerge,format=yuv420p,{detect}",
           "-t", f"{probe_duration(src):.3f}", "-f", "null", "-"])
 
 
@@ -176,6 +177,9 @@ def _normalized_clip(src: Path, dst: Path, s: RenderSettings, skip_first: bool =
     if s.smooth:
         head += "hqdn3d=0:0:12:12,"
     stab = ""
+    # AI clips often creep toward the subject; the loop seam then jumps from
+    # close-up back to wide. Hold the framing still instead.
+    head += zoom_filter(src, head)
     if s.stabilize and _has_vidstab():
         # tripod: every frame is held to the first one, as if on a tripod;
         # zoom 1% hides the edges the small shifts uncover
@@ -330,6 +334,11 @@ def _masked(src: Path, dst: Path, still: Path, mask: Path, s: RenderSettings) ->
 
 def build_loop_segment(visuals: list[Path], dst: Path, s: RenderSettings, tmp: Path,
                        mask: Path | None = None, still: Path | None = None) -> float:
+    if mask and s.mask_mode == "stab":
+        # the whole clip keeps moving; the mask only keeps snow and fire from
+        # being taken for camera shake (tripod mode also undoes slow drift,
+        # so the loop seam no longer blurs a sliding room)
+        s, mask = replace(s, stab_mask=str(mask)), None
     if mask:
         clips = [v for v in visuals if v.suffix.lower() not in IMAGE_EXTS]
         if not clips:
