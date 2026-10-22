@@ -50,6 +50,7 @@ class Breath:
     intro_lines: int = 2     # voice phrases before the first inhale
     outro_lines: int = 2     # voice phrases after the last exhale
     duck_db: float = -24.0   # background sound during the practice, under the voice
+    after_db: float = -2.0   # background after the practice, against its usual loudness
     rise: float = 0.0        # when the background starts coming back (0: when the voice ends)
     script: str = SCRIPT     # what the voice says, a phrase per line
 
@@ -105,7 +106,7 @@ def head_block(cycle: Path, voice: Path, dst: Path, voice_len: float, b: Breath,
     during the practice, back to full over RISE seconds from the closing
     lines (or from the end of the voice). Same length as `cycle`, so the
     plain cycle follows it without a seam."""
-    duck = 10 ** (b.duck_db / 20)
+    duck = 10 ** ((b.duck_db - b.after_db) / 20)  # `cycle` is already at after_db
     r = f"{(b.rise or voice_len):.3f}"
     vol = f"if(lt(t,{r}),{duck:.4f},if(lt(t,{r}+{RISE}),{duck:.4f}+(1-{duck:.4f})*(t-{r})/{RISE},1))"
     run(["ffmpeg", "-y", "-i", str(cycle), "-i", str(voice), "-filter_complex",

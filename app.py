@@ -295,6 +295,7 @@ def start_job(
     breath_out: float = Form(6.0),
     breath_cycles: int = Form(9),
     breath_duck: float = Form(-24.0),
+    breath_after: float = Form(-2.0),
 ):
     if not 0 < hours <= 12:
         raise HTTPException(400, "Длина от 0 до 12 часов")
@@ -307,7 +308,8 @@ def start_job(
     voice = None if voice_url or not voice_dir.is_dir() else next(iter(sorted(voice_dir.iterdir())), None)
     breathing = bool(voice or voice_url)
     if not (0 <= breath_start <= 120 and 1 <= breath_in <= 20 and 1 <= breath_out <= 20
-            and 0 <= breath_cycles <= 60 and -60 <= breath_duck <= 0):
+            and 0 <= breath_cycles <= 60 and -60 <= breath_duck <= 0
+            and -30 <= breath_after <= 0):
         raise HTTPException(400, "Проверьте настройки дыхания")
     mask_files = [] if mask_url else sorted((folder / "mask").iterdir()) if (folder / "mask").is_dir() else []
     try:
@@ -340,7 +342,7 @@ def start_job(
         raise HTTPException(400, problem)
     out = folder / f"{name}_{hours:g}h.mp4"
     jobs[job_id] = {"job": Job(visuals, trk, out, settings, ambient=ambient, mask=mask, still=still,
-                               voice=voice, breath=Breath(breath_start, breath_in, breath_out, breath_cycles, duck_db=breath_duck)),
+                               voice=voice, breath=Breath(breath_start, breath_in, breath_out, breath_cycles, duck_db=breath_duck, after_db=breath_after)),
                     "status": "в очереди",
                     "step": "", "progress": 0.0, "created": time.time(),
                     "drive": (visual_url, tracks_url, tracks_pick, ambient_url, mask_url, voice_url)

@@ -541,7 +541,7 @@ def build_ambient_only(ambient: Path, dst: Path, s: RenderSettings, tmp: Path,
         need = (_samples(vo) + (breathing.FADE + 5) * sr) // frame * frame + frame
         n = max(n, int(need))
     cycle = tmp / "ambient_only_cycle.wav"
-    _ambient_cycle(limited, cycle, n, s, tmp, level=0.0)
+    _ambient_cycle(limited, cycle, n, s, tmp, level=(breath or Breath()).after_db if voice else 0.0)
     if voice:
         head = tmp / "ambient_head.wav"
         breathing.head_block(cycle, vo, head, _samples(vo) / sr, breath or Breath(), _run)
