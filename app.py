@@ -22,7 +22,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from render.drive import fetch_folder
-from render.engine import Job, RenderSettings, render
+from render.engine import Breath, Job, RenderSettings, render
 
 DATA = Path(os.environ.get("APP_DATA", Path(__file__).parent / "data"))
 PASSWORD = os.environ.get("APP_PASSWORD", "")
@@ -75,7 +75,7 @@ def _fetch_from_drive(info: dict, progress) -> None:
     """Download the clips and tracks from Google Drive links straight to the server."""
     job: Job = info["job"]
     folder = job.output.parent
-    visual_url, tracks_url, pick, ambient_url, mask_url = info["drive"]
+    visual_url, tracks_url, pick, ambient_url, mask_url, voice_url = info["drive"]
     if visual_url:
         progress("Скачиваю клипы с Google Диска", 0.0)
         found = fetch_folder(visual_url, folder / "visual", VISUAL_EXTS)
@@ -90,6 +90,9 @@ def _fetch_from_drive(info: dict, progress) -> None:
     if ambient_url:
         progress("Скачиваю фоновый звук с Google Диска", 0.0)
         job.ambient = fetch_folder(ambient_url, folder / "ambient", AUDIO_EXTS)[0]
+    if voice_url:
+        progress("Скачиваю голос с Google Диска", 0.0)
+        job.voice = fetch_folder(voice_url, folder / "voice", AUDIO_EXTS)[0]
     if mask_url:
         progress("Скачиваю маску с Google Диска", 0.0)
         job.mask, job.still = split_mask(fetch_folder(mask_url, folder / "mask", IMAGE_EXTS))
@@ -113,7 +116,7 @@ threading.Thread(target=worker, daemon=True).start()
 
 
 CHUNK_LIMIT = 64 * 1024 * 1024
-KINDS = {"visual", "tracks", "ambient", "mask"}
+KINDS = {"visual", "tracks", "ambient", "mask", "voice"}
 
 
 MAX_FILE_GB = 20  # the server disk is small and shared
@@ -188,6 +191,11 @@ def start_job(
     color_period: float = Form(120.0),
     mask_url: str = Form(""),
     stabilize: bool = Form(False),
+    voice_url: str = Form(""),
+    breath_start: float = Form(16.0),
+    breath_in: float = Form(4.0),
+    breath_out: float = Form(6.0),
+    breath_cycles: int = Form(9),
 ):
     if not 0 < hours <= 12:
         raise HTTPException(400, "Длина от 0 до 12 часов")
@@ -195,7 +203,13 @@ def start_job(
         raise HTTPException(400, "Задание уже запущено")
     folder = _job_dir(job_id)
     visual_url, tracks_url, ambient_url = visual_url.strip(), tracks_url.strip(), ambient_url.strip()
-    mask_url = mask_url.strip()
+    mask_url, voice_url = mask_url.strip(), voice_url.strip()
+    voice_dir = folder / "voice"
+    voice = None if voice_url or not voice_dir.is_dir() else next(iter(sorted(voice_dir.iterdir())), None)
+    breathing = bool(voice or voice_url)
+    if not (0 <= breath_start <= 120 and 1 <= breath_in <= 20 and 1 <= breath_out <= 20
+            and 0 <= breath_cycles <= 60):
+        raise HTTPException(400, "Проверьте настройки дыхания")
     mask_files = [] if mask_url else sorted((folder / "mask").iterdir()) if (folder / "mask").is_dir() else []
     try:
         mask, still = split_mask(mask_files)
@@ -203,13 +217,15 @@ def start_job(
         raise HTTPException(400, str(exc))
     amb_dir = folder / "ambient"
     ambient = None if ambient_url or not amb_dir.is_dir() else next(iter(sorted(amb_dir.iterdir())), None)
+    if breathing and not (ambient or ambient_url):
+        raise HTTPException(400, "Для вступления с дыханием нужен фоновый звук (дождь, волны)")
     visuals = [] if visual_url else sorted((folder / "visual").iterdir())
     trk = [] if tracks_url else sorted((folder / "tracks").iterdir())
-    if not (visuals or visual_url) or not (trk or tracks_url or ambient or ambient_url):
+    if not (visuals or visual_url or breathing) or not (trk or tracks_url or ambient or ambient_url):
         raise HTTPException(400, "Нужны картинка или клипы и треки или фоновый звук (файлы или ссылка на Google Диск)")
     if not tracks_url and tracks_pick and len(trk) > tracks_pick:
         trk = sorted(random.sample(trk, tracks_pick))
-    name = visuals[0].stem if visuals else "video"
+    name = "sleep" if breathing else visuals[0].stem if visuals else "video"
     w, h = (3840, 2160) if resolution == "4k" else (1920, 1080)
     if not bitrate:
         bitrate = auto_bitrate(resolution, hours)
@@ -220,11 +236,12 @@ def start_job(
         color_drift=color_drift, color_period=color_period, stabilize=stabilize,
     )
     out = folder / f"{name}_{hours:g}h.mp4"
-    jobs[job_id] = {"job": Job(visuals, trk, out, settings, ambient=ambient, mask=mask, still=still),
+    jobs[job_id] = {"job": Job(visuals, trk, out, settings, ambient=ambient, mask=mask, still=still,
+                               voice=voice, breath=Breath(breath_start, breath_in, breath_out, breath_cycles)),
                     "status": "в очереди",
                     "step": "", "progress": 0.0, "created": time.time(),
-                    "drive": (visual_url, tracks_url, tracks_pick, ambient_url, mask_url)
-                    if visual_url or tracks_url or ambient_url or mask_url else None}
+                    "drive": (visual_url, tracks_url, tracks_pick, ambient_url, mask_url, voice_url)
+                    if visual_url or tracks_url or ambient_url or mask_url or voice_url else None}
     work.put(job_id)
     return {"id": job_id}
 
@@ -238,7 +255,8 @@ def list_jobs():
             "id": job_id, "status": info["status"], "step": info["step"],
             "progress": info["progress"], "seconds": info.get("seconds"),
             "visual": (job.visuals[0].name + (f" + ещё {len(job.visuals) - 1}" if len(job.visuals) > 1 else ""))
-                      if job.visuals else "клипы с Google Диска",
+                      if job.visuals else "дыхание + чёрный экран" if job.voice or (info.get("drive") or [None] * 6)[5]
+                      else "клипы с Google Диска",
             "tracks": len(job.tracks),
             "file": job.output.name if info["status"] == "готово" else None,
             "size_gb": round(job.output.stat().st_size / 1e9, 2) if job.output.exists() and info["status"] == "готово" else None,
