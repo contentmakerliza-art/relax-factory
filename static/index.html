@@ -47,10 +47,15 @@
       <label>Голос <span class="hint">MP3 или WAV</span></label>
       <input type="file" name="voice" accept="audio/*">
       <input type="url" name="voice_url" placeholder="или ссылка на Google Диск" style="margin-top:6px">
+      <label>Текст голоса <span class="hint">по фразе на строку, с разметкой [intro], [cycles x10, 4-8], [sighs x3], [outro]</span></label>
+      <select id="script_pick" onchange="pickScript()"></select>
+      <textarea name="breath_script" id="breath_script" rows="6" style="width:100%;margin-top:6px"></textarea>
+      <p class="hint" style="margin:4px 0">Ритм берётся из разметки: 4-6 вдох-выдох, 4-7-8 с задержкой (круг замирает), [sighs] двойной вдох. Поля ниже нужны только для текста без ритма в разметке.</p>
       <div class="row">
         <div><label>Первый вдох, сек</label><input type="number" name="breath_start" value="16" min="0" max="120" step="any"></div>
         <div><label>Вдох, сек</label><input type="number" name="breath_in" value="4" min="1" max="20" step="any"></div>
         <div><label>Выдох, сек</label><input type="number" name="breath_out" value="6" min="1" max="20" step="any"></div>
+        <div><label>Задержка, сек</label><input type="number" name="breath_hold" value="0" min="0" max="30" step="any"></div>
         <div><label>Циклов с подписями</label><input type="number" name="breath_cycles" value="9" min="0" max="60"></div>
         <div><label>Фон под голосом, дБ</label><input type="number" name="breath_duck" value="-24" min="-60" max="0" step="1"></div>
         <div><label>Громкость дождя после практики, дБ</label><input type="number" name="breath_after" value="-2" min="-30" max="0" step="0.5"></div>
@@ -134,6 +139,19 @@ f.addEventListener('submit', async e => {
   go.disabled = false; load();
 });
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let presets = {};
+async function loadScripts() {
+  const r = await fetch('scripts'); if (!r.ok) return;
+  const d = await r.json(); presets = d.presets;
+  const sel = document.getElementById('script_pick');
+  sel.innerHTML = Object.keys(presets).map(n => `<option>${esc(n)}</option>`).join('') + '<option value="">Свой текст</option>';
+  sel.value = d.default; pickScript();
+}
+function pickScript() {
+  const n = document.getElementById('script_pick').value;
+  if (n) document.getElementById('breath_script').value = presets[n];
+}
+loadScripts();
 async function showDisk() {
   const r = await fetch('disk'); if (!r.ok) return;
   const d = await r.json();
