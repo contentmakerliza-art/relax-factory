@@ -517,7 +517,7 @@ def _ambient_source(job: "Job", s: RenderSettings, tmp: Path) -> Path | None:
 
 
 def build_ambient_only(ambient: Path, dst: Path, s: RenderSettings, tmp: Path,
-                       voice: Path | None = None) -> str:
+                       voice: Path | None = None, breath: Breath | None = None) -> str:
     """No music: the background sound alone, at full loudness, as a seamless
     cycle of whole AAC frames (at least 10 minutes, so the blend is rare)."""
     sr, frame = 48000, 1024
@@ -544,7 +544,7 @@ def build_ambient_only(ambient: Path, dst: Path, s: RenderSettings, tmp: Path,
     _ambient_cycle(limited, cycle, n, s, tmp, level=0.0)
     if voice:
         head = tmp / "ambient_head.wav"
-        breathing.head_block(cycle, vo, head, _samples(vo) / sr, _run)
+        breathing.head_block(cycle, vo, head, _samples(vo) / sr, breath or Breath(), _run)
     encode_seamless_aac(cycle, dst, s.duration, s.audio_bitrate, tmp, head)
     return ""
 
@@ -756,7 +756,7 @@ def _render_breathing(job: Job, s: RenderSettings, say: Progress, tmp: Path) -> 
 
     say("Собираю звук", 0.4)
     audio = tmp / "audio.m4a"
-    build_ambient_only(_ambient_source(job, s, tmp), audio, s, tmp, job.voice)
+    build_ambient_only(_ambient_source(job, s, tmp), audio, s, tmp, job.voice, job.breath)
     job.timecodes = ""
 
     say("Склеиваю видео до нужной длины", 0.8)
