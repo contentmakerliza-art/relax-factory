@@ -133,7 +133,7 @@ def save_job(job_id: str, info: dict) -> None:
     meta = {"status": info["status"], "step": info["step"], "seconds": info.get("seconds"),
             "created": info.get("created"), "label": _label(info), "tracks": len(job.tracks),
             "output": job.output.name, "previews": [p.name for p in job.previews],
-            "timecodes": job.timecodes, "settings": asdict(job.settings)}
+            "timecodes": job.timecodes, "warning": job.warning, "settings": asdict(job.settings)}
     try:
         (DATA / job_id / "job.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
     except OSError:
@@ -166,6 +166,7 @@ def load_jobs() -> None:
         job = Job([], [], folder / meta["output"], RenderSettings(**known))
         job.previews = [folder / n for n in meta.get("previews", [])]
         job.timecodes = meta.get("timecodes", "")
+        job.warning = meta.get("warning", "")
         if "duration" not in known and job.output.exists():
             job.settings.duration = probe_duration(job.output)
         jobs[folder.name] = {"job": job, "status": meta["status"], "step": meta["step"],
@@ -326,6 +327,7 @@ def list_jobs():
             "size_gb": round(job.output.stat().st_size / 1e9, 2) if job.output.exists() and info["status"] == "готово" else None,
             "previews": len(job.previews) if info["status"] == "готово" else 0,
             "timecodes": job.timecodes if info["status"] == "готово" else "",
+            "warning": job.warning,
             "settings": asdict(job.settings),
         })
     return rows
