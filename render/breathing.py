@@ -137,14 +137,21 @@ def timeline(plan: Plan, b: Breath, durs: list[float] | None, until: float):
     phases = []
     for ph, lines, cues in plan.breaths:
         size = 0.0
-        for p, (cap, sec, to) in enumerate(ph):
-            for _ in [j for j, q in enumerate(cues) if q == p]:
-                t = max(t, free)
-                at.append(t)
-                free = t + (durs[i] + 0.3 if durs else 0)
-                i += 1
-            phases.append((t, t + sec, size, to, cap))
-            t, size = t + sec, to
+        for c, first in enumerate(cues):
+            # the phases this line speaks over, slowed down if the line is longer
+            last = cues[c + 1] if c + 1 < len(cues) else len(ph)
+            if c == 0:
+                first = 0
+            seg = ph[first:last]
+            t = max(t, free)
+            at.append(t)
+            need = durs[i] + 0.3 if durs else 0.0
+            free = t + need
+            i += 1
+            stretch = max(1.0, need / sum(sec for _, sec, _ in seg))
+            for cap, sec, to in seg:
+                phases.append((t, t + sec * stretch, size, to, cap))
+                t, size = t + sec * stretch, to
     end = t
     rise = 0.0
     for k in range(len(plan.outro)):
@@ -328,6 +335,10 @@ def arrange_voice(voice: Path, b: Breath, dst: Path, run) -> tuple[Path, Breath,
          chains + "".join(f"[p{i}]" for i in range(len(parts)))
          + f"amix=inputs={len(parts)}:normalize=0:duration=longest[a]",
          "-map", "[a]", "-c:a", "pcm_s16le", str(dst)])
+    # for checking by ear: where each line was found in the file and where it goes
+    dst.with_suffix(".txt").write_text("".join(
+        f"{a:7.2f}-{e:6.2f} → {d:7.2f}  {line}\n" for (a, e), d, line in zip(parts, at, lines)),
+        encoding="utf-8")
     return dst, replace(b, phases=tuple(phases), rise=rise), ""
 
 
