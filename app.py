@@ -23,7 +23,9 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from render.drive import fetch_folder
+from render.breathing import parse_script
 from render.engine import Breath, Job, RenderSettings, probe_duration, render
+from render.scripts import DEFAULT, PRESETS
 
 DATA = Path(os.environ.get("APP_DATA", Path(__file__).parent / "data"))
 PASSWORD = os.environ.get("APP_PASSWORD", "")
@@ -296,6 +298,8 @@ def start_job(
     breath_cycles: int = Form(9),
     breath_duck: float = Form(-24.0),
     breath_after: float = Form(-2.0),
+    breath_hold: float = Form(0.0),
+    breath_script: str = Form(""),
 ):
     if not 0 < hours <= 12:
         raise HTTPException(400, "Длина от 0 до 12 часов")
@@ -309,8 +313,18 @@ def start_job(
     breathing = bool(voice or voice_url)
     if not (0 <= breath_start <= 120 and 1 <= breath_in <= 20 and 1 <= breath_out <= 20
             and 0 <= breath_cycles <= 60 and -60 <= breath_duck <= 0
-            and -30 <= breath_after <= 0):
+            and -30 <= breath_after <= 0
+            and 0 <= breath_hold <= 30):
         raise HTTPException(400, "Проверьте настройки дыхания")
+    breath = Breath(breath_start, breath_in, breath_out, breath_cycles, breath_hold,
+                    duck_db=breath_duck, after_db=breath_after)
+    if breath_script.strip():
+        breath.script = breath_script.strip()
+    if breathing:
+        try:
+            parse_script(breath)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
     mask_files = [] if mask_url else sorted((folder / "mask").iterdir()) if (folder / "mask").is_dir() else []
     try:
         mask, still = split_mask(mask_files)
@@ -342,7 +356,7 @@ def start_job(
         raise HTTPException(400, problem)
     out = folder / f"{name}_{hours:g}h.mp4"
     jobs[job_id] = {"job": Job(visuals, trk, out, settings, ambient=ambient, mask=mask, still=still,
-                               voice=voice, breath=Breath(breath_start, breath_in, breath_out, breath_cycles, duck_db=breath_duck, after_db=breath_after)),
+                               voice=voice, breath=breath),
                     "status": "в очереди",
                     "step": "", "progress": 0.0, "created": time.time(),
                     "drive": (visual_url, tracks_url, tracks_pick, ambient_url, mask_url, voice_url)
@@ -428,6 +442,11 @@ def _size(folder: Path) -> int:
 @app.get("/disk", dependencies=[Depends(check)])
 def disk():
     return {"free_gb": round(free_gb(), 1), "reserve_gb": RESERVE_GB}
+
+
+@app.get("/scripts", dependencies=[Depends(check)])
+def scripts():
+    return {"default": DEFAULT, "presets": PRESETS}
 
 
 @app.get("/version")
