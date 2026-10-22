@@ -14,6 +14,7 @@ from pathlib import Path
 import gdown
 
 FOLDER = re.compile(r"/folders/([\w-]+)")
+FILE = re.compile(r"(?:/d/|[?&]id=)([\w-]{20,})")
 
 
 def fetch_folder(url: str, dst: Path, exts: set[str]) -> list[Path]:
@@ -27,8 +28,9 @@ def fetch_folder(url: str, dst: Path, exts: set[str]) -> list[Path]:
                     gdown.download_folder(id=m.group(1), output=tmp, quiet=True,
                                           use_cookies=False, resume=True)
                 else:
-                    gdown.download(url, output=tmp + "/", quiet=True, fuzzy=True,
-                                   use_cookies=False, resume=True)
+                    m = FILE.search(url)
+                    gdown.download(id=m.group(1) if m else None, url=None if m else url,
+                                   output=tmp + "/", quiet=True, use_cookies=False, resume=True)
                 break
             except Exception as exc:  # Drive often fails one file now and then
                 if attempt < 4:
