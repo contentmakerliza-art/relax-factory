@@ -56,12 +56,15 @@ def worker() -> None:
             info["step"], info["progress"] = msg, frac
 
         try:
+            if problem := space_problem(info["job"].settings, _black(info)):
+                raise RuntimeError(problem)
             if info.get("drive"):
                 _fetch_from_drive(info, progress)
             render(info["job"], progress)
             info["status"] = "готово"
         except Exception as exc:  # shown to the user on the page
             info["status"], info["step"] = "ошибка", str(exc)[-500:]
+            info["job"].output.unlink(missing_ok=True)  # a half-written video only takes space
         info["seconds"] = round(time.time() - started)
         save_job(job_id, info)
         if work.empty():
@@ -184,6 +187,35 @@ KINDS = {"visual", "tracks", "ambient", "mask", "voice"}
 
 
 MAX_FILE_GB = 20  # the server disk is small and shared
+# never let the disk get below this: n8n and the rest of the server need it
+RESERVE_GB = float(os.environ.get("RELAX_RESERVE_GB", "5"))
+
+
+def need_gb(s: RenderSettings, black: bool = False) -> float:
+    """Disk a render may take: the video at its bitrate (a black screen takes
+    almost nothing), the sound, and room for the working files."""
+    mbit = 0.5 if black else float(s.video_bitrate.rstrip("M") or 8)
+    return (mbit + 0.4) * s.duration / 8000 * 1.1 + 2
+
+
+def _black(info: dict) -> bool:
+    """Breathing intro + black screen: the video is nearly free."""
+    return bool(info["job"].voice or (info.get("drive") or [""] * 6)[5])
+
+
+def free_gb() -> float:
+    return shutil.disk_usage(DATA).free / 1e9
+
+
+def space_problem(s: RenderSettings, black: bool, queued: float = 0.0) -> str:
+    """Why this render must not start, or ''."""
+    need = need_gb(s, black)
+    left = free_gb() - queued - need
+    if left >= RESERVE_GB:
+        return ""
+    return (f"Мало места на сервере: свободно {free_gb():.1f} ГБ, для видео нужно около "
+            f"{need + queued:.1f} ГБ, и {RESERVE_GB:g} ГБ должно остаться для остальных программ. "
+            "Удалите старые видео в очереди (кнопка «Удалить» или «Удалить старые»).")
 
 
 def auto_bitrate(resolution: str, hours: float) -> int:
@@ -301,6 +333,10 @@ def start_job(
         codec=codec, video_bitrate=f"{bitrate}M", ambient_level=ambient_level,
         color_drift=color_drift, color_period=color_period, stabilize=stabilize, mask_mode=mask_mode if mask_mode in ("still", "stab") else "still", smooth=smooth,
     )
+    queued = sum(need_gb(i["job"].settings, _black(i)) for i in jobs.values()
+                 if i["status"] in ("в очереди", "работает"))
+    if problem := space_problem(settings, breathing, queued):
+        raise HTTPException(400, problem)
     out = folder / f"{name}_{hours:g}h.mp4"
     jobs[job_id] = {"job": Job(visuals, trk, out, settings, ambient=ambient, mask=mask, still=still,
                                voice=voice, breath=Breath(breath_start, breath_in, breath_out, breath_cycles)),
@@ -362,6 +398,33 @@ def delete(job_id: str):
     shutil.rmtree(DATA / job_id, ignore_errors=True)
     jobs.pop(job_id)
     return {"ok": True}
+
+
+@app.post("/jobs/cleanup", dependencies=[Depends(check)])
+def cleanup(days: float = Form(7.0)):
+    """Delete finished or failed videos older than `days`, and uploads that
+    were never started (older than a day)."""
+    now, freed = time.time(), 0
+    for job_id, info in list(jobs.items()):
+        created = info.get("created") or (DATA / job_id).stat().st_mtime
+        if info["status"] in ("готово", "ошибка") and now - created > days * 86400:
+            freed += _size(DATA / job_id)
+            shutil.rmtree(DATA / job_id, ignore_errors=True)
+            jobs.pop(job_id)
+    for folder in DATA.iterdir():
+        if folder.is_dir() and folder.name not in jobs and now - folder.stat().st_mtime > 86400:
+            freed += _size(folder)
+            shutil.rmtree(folder, ignore_errors=True)
+    return {"freed_gb": round(freed / 1e9, 1), "free_gb": round(free_gb(), 1)}
+
+
+def _size(folder: Path) -> int:
+    return sum(p.stat().st_size for p in folder.rglob("*") if p.is_file())
+
+
+@app.get("/disk", dependencies=[Depends(check)])
+def disk():
+    return {"free_gb": round(free_gb(), 1), "reserve_gb": RESERVE_GB}
 
 
 @app.get("/version")

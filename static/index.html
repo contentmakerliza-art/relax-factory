@@ -82,7 +82,7 @@
     <p class="muted" id="msg"></p>
   </form>
 
-  <div class="card"><h2 style="margin:0 0 6px;font-size:18px">Очередь</h2><div id="jobs" class="muted">Пока пусто</div></div>
+  <div class="card"><h2 style="margin:0 0 6px;font-size:18px">Очередь</h2><div class="muted" style="margin-bottom:6px"><span id="disk"></span> · <a href="#" onclick="cleanup();return false">Удалить старые</a></div><div id="jobs" class="muted">Пока пусто</div></div>
 </main>
 <script>
 const f = document.getElementById('f'), msg = document.getElementById('msg'), go = document.getElementById('go');
@@ -132,9 +132,22 @@ f.addEventListener('submit', async e => {
   go.disabled = false; load();
 });
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+async function showDisk() {
+  const r = await fetch('disk'); if (!r.ok) return;
+  const d = await r.json();
+  document.getElementById('disk').textContent = `Свободно на сервере ${d.free_gb} ГБ` + (d.free_gb < d.reserve_gb + 5 ? ' (мало!)' : '');
+}
+async function cleanup() {
+  const days = prompt('Удалить готовые видео старше скольких дней?', '7');
+  if (days === null || isNaN(parseFloat(days))) return;
+  const f = new FormData(); f.append('days', days);
+  const r = await (await fetch('jobs/cleanup', {method:'POST', body:f})).json();
+  alert(`Освобождено ${r.freed_gb} ГБ, свободно ${r.free_gb} ГБ`); load();
+}
 async function del(id) { if (confirm('Удалить видео и файлы?')) { await fetch('jobs/' + id, {method:'DELETE'}); load(); } }
 let lastJobs = '';
 async function load() {
+  showDisk();
   const r = await fetch('jobs'); if (!r.ok) return;
   const text = await r.text(), box = document.getElementById('jobs');
   if (text === lastJobs) return;  // redraw only on change: keeps opened frames open, no image re-requests
