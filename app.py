@@ -5,6 +5,7 @@ Run:  APP_PASSWORD=... uvicorn app:app --host 0.0.0.0 --port 8000
 
 from __future__ import annotations
 
+import json
 import os
 import queue
 import random
@@ -22,7 +23,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from render.drive import fetch_folder
-from render.engine import Breath, Job, RenderSettings, render
+from render.engine import Breath, Job, RenderSettings, probe_duration, render
 
 DATA = Path(os.environ.get("APP_DATA", Path(__file__).parent / "data"))
 PASSWORD = os.environ.get("APP_PASSWORD", "")
@@ -46,6 +47,7 @@ def worker() -> None:
         job_id = work.get()
         info = jobs[job_id]
         info["status"] = "работает"
+        save_job(job_id, info)
         started = time.time()
         busy = DATA / "busy"  # auto-update waits while this file exists
         busy.touch()
@@ -61,6 +63,7 @@ def worker() -> None:
         except Exception as exc:  # shown to the user on the page
             info["status"], info["step"] = "ошибка", str(exc)[-500:]
         info["seconds"] = round(time.time() - started)
+        save_job(job_id, info)
         if work.empty():
             busy.unlink(missing_ok=True)
 
@@ -112,6 +115,66 @@ def split_mask(files: list[Path]) -> tuple[Path | None, Path | None]:
     return named[0], rest[0]
 
 
+def _label(info: dict) -> str:
+    if info.get("label"):
+        return info["label"]
+    job: Job = info["job"]
+    if job.visuals:
+        return job.visuals[0].name + (f" + ещё {len(job.visuals) - 1}" if len(job.visuals) > 1 else "")
+    if job.voice or (info.get("drive") or [None] * 6)[5]:
+        return "дыхание + чёрный экран"
+    return "клипы с Google Диска"
+
+
+def save_job(job_id: str, info: dict) -> None:
+    """The list lives in memory; this copy next to the files brings it back
+    after the app restarts (every update rebuilds the container)."""
+    job: Job = info["job"]
+    meta = {"status": info["status"], "step": info["step"], "seconds": info.get("seconds"),
+            "created": info.get("created"), "label": _label(info), "tracks": len(job.tracks),
+            "output": job.output.name, "previews": [p.name for p in job.previews],
+            "timecodes": job.timecodes, "settings": asdict(job.settings)}
+    try:
+        (DATA / job_id / "job.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def load_jobs() -> None:
+    """Finished videos come back into the list after a restart. A video made
+    before job.json existed is found by its file. A job cut off by the restart
+    shows as interrupted."""
+    for folder in sorted(p for p in DATA.iterdir() if p.is_dir()):
+        meta_file = folder / "job.json"
+        if meta_file.exists():
+            meta = json.loads(meta_file.read_text(encoding="utf-8"))
+        else:
+            videos = sorted(folder.glob("*.mp4"))
+            if not videos:
+                continue
+            meta = {"status": "готово", "step": "", "label": videos[0].stem, "tracks": 0,
+                    "output": videos[0].name, "previews": [p.name for p in sorted(folder.glob("*_preview_*.jpg"))],
+                    "timecodes": "", "settings": {}}
+            txt = videos[0].with_suffix(".txt")
+            if txt.exists():
+                meta["timecodes"] = txt.read_text(encoding="utf-8").strip()
+        if meta["status"] in ("в очереди", "работает"):
+            meta["status"], meta["step"] = "ошибка", "Прервано: сервер обновлялся. Запустите заново"
+        if meta["status"] == "готово" and not (folder / meta["output"]).exists():
+            continue
+        known = {k: v for k, v in meta.get("settings", {}).items() if k in RenderSettings.__dataclass_fields__}
+        job = Job([], [], folder / meta["output"], RenderSettings(**known))
+        job.previews = [folder / n for n in meta.get("previews", [])]
+        job.timecodes = meta.get("timecodes", "")
+        if "duration" not in known and job.output.exists():
+            job.settings.duration = probe_duration(job.output)
+        jobs[folder.name] = {"job": job, "status": meta["status"], "step": meta["step"],
+                             "progress": 1.0, "seconds": meta.get("seconds"),
+                             "created": meta.get("created"), "label": meta["label"],
+                             "tracks": meta.get("tracks", 0)}
+
+
+load_jobs()
 threading.Thread(target=worker, daemon=True).start()
 
 
@@ -243,6 +306,7 @@ def start_job(
                     "step": "", "progress": 0.0, "created": time.time(),
                     "drive": (visual_url, tracks_url, tracks_pick, ambient_url, mask_url, voice_url)
                     if visual_url or tracks_url or ambient_url or mask_url or voice_url else None}
+    save_job(job_id, jobs[job_id])
     work.put(job_id)
     return {"id": job_id}
 
@@ -255,10 +319,8 @@ def list_jobs():
         rows.append({
             "id": job_id, "status": info["status"], "step": info["step"],
             "progress": info["progress"], "seconds": info.get("seconds"),
-            "visual": (job.visuals[0].name + (f" + ещё {len(job.visuals) - 1}" if len(job.visuals) > 1 else ""))
-                      if job.visuals else "дыхание + чёрный экран" if job.voice or (info.get("drive") or [None] * 6)[5]
-                      else "клипы с Google Диска",
-            "tracks": len(job.tracks),
+            "visual": _label(info),
+            "tracks": info.get("tracks", len(job.tracks)),
             "file": job.output.name if info["status"] == "готово" else None,
             "size_gb": round(job.output.stat().st_size / 1e9, 2) if job.output.exists() and info["status"] == "готово" else None,
             "previews": len(job.previews) if info["status"] == "готово" else 0,
