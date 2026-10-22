@@ -253,6 +253,7 @@ def start_job(
     color_drift: str = Form("none"),
     color_period: float = Form(120.0),
     mask_url: str = Form(""),
+    mask_mode: str = Form("still"),
     stabilize: bool = Form(False),
     smooth: bool = Form(False),
     voice_url: str = Form(""),
@@ -297,7 +298,7 @@ def start_job(
         width=w, height=h, fps=fps, duration=hours * 3600, loop_mode=loop_mode,
         speed=speed, loop_crossfade=loop_crossfade, find_loop_point=find_loop_point, track_crossfade=track_crossfade, shuffle_tracks=shuffle,
         codec=codec, video_bitrate=f"{bitrate}M", ambient_level=ambient_level,
-        color_drift=color_drift, color_period=color_period, stabilize=stabilize, smooth=smooth,
+        color_drift=color_drift, color_period=color_period, stabilize=stabilize, mask_mode=mask_mode if mask_mode in ("still", "stab") else "still", smooth=smooth,
     )
     out = folder / f"{name}_{hours:g}h.mp4"
     jobs[job_id] = {"job": Job(visuals, trk, out, settings, ambient=ambient, mask=mask, still=still,
