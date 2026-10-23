@@ -24,7 +24,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from render.drive import fetch_folder
 from render.breathing import parse_script
-from render.engine import Breath, Job, RenderSettings, probe_duration, render
+from render.engine import Breath, Job, RenderSettings, make_check_clips, probe_duration, render
 from render.scripts import DEFAULT, PRESETS
 
 DATA = Path(os.environ.get("APP_DATA", Path(__file__).parent / "data"))
@@ -138,7 +138,7 @@ def save_job(job_id: str, info: dict) -> None:
     meta = {"status": info["status"], "step": info["step"], "seconds": info.get("seconds"),
             "created": info.get("created"), "label": _label(info), "tracks": len(job.tracks),
             "output": job.output.name, "previews": [p.name for p in job.previews],
-            "timecodes": job.timecodes, "warning": job.warning, "settings": asdict(job.settings)}
+            "timecodes": job.timecodes, "warning": job.warning, "checks": job.checks, "settings": asdict(job.settings)}
     try:
         (DATA / job_id / "job.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
     except OSError:
@@ -172,6 +172,7 @@ def load_jobs() -> None:
         job.previews = [folder / n for n in meta.get("previews", [])]
         job.timecodes = meta.get("timecodes", "")
         job.warning = meta.get("warning", "")
+        job.checks = meta.get("checks", "")
         if "duration" not in known and job.output.exists():
             job.settings.duration = probe_duration(job.output)
         jobs[folder.name] = {"job": job, "status": meta["status"], "step": meta["step"],
@@ -381,6 +382,7 @@ def list_jobs():
             "previews": len(job.previews) if info["status"] == "готово" else 0,
             "timecodes": job.timecodes if info["status"] == "готово" else "",
             "warning": job.warning,
+            "checks": job.checks if info["status"] == "готово" else "",
             "settings": asdict(job.settings),
         })
     return rows
@@ -405,6 +407,21 @@ def preview(job_id: str, n: int, download: bool = False):
     p: Path = info["job"].previews[n - 1]
     return FileResponse(p, filename=p.name, media_type="image/jpeg",
                         content_disposition_type="attachment" if download else "inline")
+
+
+@app.get("/jobs/{job_id}/check/{part}", dependencies=[Depends(check)])
+def check_clip(job_id: str, part: str):
+    """The first 3 minutes or the last minute of the video, small enough to open at once."""
+    if part not in ("start", "end"):
+        raise HTTPException(404)
+    f = _job_dir(job_id) / f"check_{part}.mp4"
+    info = jobs.get(job_id)
+    if not f.exists() and info and info["status"] == "готово" and info["job"].output.exists():
+        make_check_clips(info["job"])  # videos made before this existed: a few seconds
+        save_job(job_id, info)
+    if not f.exists():
+        raise HTTPException(404, "Нет кусочка для проверки")
+    return FileResponse(f, media_type="video/mp4", content_disposition_type="inline")
 
 
 @app.get("/jobs/{job_id}/voice-timing", dependencies=[Depends(check)])
