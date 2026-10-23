@@ -36,6 +36,9 @@ mount "$DISK" /mnt/relax-new
 
 echo "Останавливаю приложение и копирую видео на новый диск…"
 docker stop relax-factory >/dev/null 2>&1 || true
+# the upload browser would keep seeing the old folder: restart it afterwards
+BROWSER_WAS_UP=$(docker ps -q -f name=^relax-browser$)
+docker stop relax-browser >/dev/null 2>&1 || true
 mkdir -p "$DATA"
 cp -a "$DATA/." /mnt/relax-new/
 umount /mnt/relax-new && rmdir /mnt/relax-new
@@ -44,6 +47,7 @@ echo "UUID=$UUID $DATA ext4 defaults,nofail 0 2" >> /etc/fstab
 mount "$DATA"
 rm -rf "$DATA.old"
 docker start relax-factory >/dev/null
+[ -n "$BROWSER_WAS_UP" ] && docker start relax-browser >/dev/null
 echo
 echo "Готово. Видео теперь на новом диске:"
 df -h "$DATA"
