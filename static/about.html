@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Relax Factory Uploader</title>
+<style>
+  :root { --bg:#f6f4f1; --text:#2b2a28; --muted:#7a766f; --accent:#6b5bd2; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#1b1a19; --text:#eeeae4; --muted:#a39e96; --accent:#9c8ff0; } }
+  body { margin:0; background:var(--bg); color:var(--text); font:17px/1.55 -apple-system, system-ui, sans-serif; }
+  main { max-width:680px; margin:0 auto; padding:32px 16px 60px; }
+  h1 { font-size:28px; margin:0 0 6px; } .sub { color:var(--muted); margin:0 0 24px; }
+  h2 { font-size:19px; margin:28px 0 8px; } a { color:var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Relax Factory Uploader</h1>
+  <p class="sub">A private, single-user tool of an independent YouTube creator.</p>
+
+  <p>Relax Factory is a small web app on my own server. I use it to render long ambient videos
+  (cozy cabin scenes with fireplace, rain and snow sounds) from clips and sounds I make myself,
+  and to upload the finished videos to my own YouTube channels.</p>
+
+  <h2>What it does with YouTube</h2>
+  <p>After I connect one of my channels with Google sign-in (OAuth), the app uploads a finished video
+  to that channel with its title, description, tags, thumbnail and scheduled publish time, and adds it
+  to a playlist. Files are 20–40 GB, too large to upload from a home connection, so the upload runs
+  from the server.</p>
+
+  <h2>Who can use it</h2>
+  <p>Only me. The app is protected by a password and is not offered to anyone else.
+  It only works with channels I own.</p>
+
+  <h2>Data</h2>
+  <p>The app does not collect, store or share any data about viewers or other people.
+  See the <a href="/privacy">privacy policy</a>.</p>
+</main>
+</body>
+</html>

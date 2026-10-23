@@ -8,6 +8,8 @@ services:
     env_file: .env
     volumes:
       - /var/lib/relax-factory:/data
+      # YouTube keys: outside the videos, so the upload browser never sees them
+      - /var/lib/relax-secrets:/secrets
     # leave room for the other services on a small server
     # set by autoupdate.sh from the server size (2 cores: 1.5; 4 cores: 3)
     cpus: ${RELAX_CPUS:-1.5}

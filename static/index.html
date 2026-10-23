@@ -90,6 +90,16 @@
   </form>
 
   <div class="card"><h2 style="margin:0 0 6px;font-size:18px">Очередь</h2><div class="muted" style="margin-bottom:6px"><span id="disk"></span> · <a href="#" onclick="cleanup();return false">Удалить старые</a></div><div id="jobs" class="muted">Пока пусто</div></div>
+
+  <div class="card"><h2 style="margin:0 0 6px;font-size:18px">YouTube</h2>
+    <div class="muted">Адрес перенаправления для Google Cloud: <b id="yt_redirect"></b><br>
+      Страницы для Google: <a href="about" target="_blank">о приложении</a> · <a href="privacy" target="_blank">конфиденциальность</a></div>
+    <label>Ключ из Google Cloud (JSON веб-приложения) <span class="hint" id="yt_client"></span></label>
+    <input type="file" id="yt_file" accept=".json,application/json" onchange="ytClient()">
+    <div id="yt_channels" class="muted" style="margin-top:12px"></div>
+    <button type="button" id="yt_connect" onclick="location.href='youtube/connect'">Подключить YouTube</button>
+    <p class="muted" id="yt_msg"></p>
+  </div>
 </main>
 <script>
 const f = document.getElementById('f'), msg = document.getElementById('msg'), go = document.getElementById('go');
@@ -188,6 +198,28 @@ async function load() {
   </div>`).join('');
 }
 load(); setInterval(load, 4000);
+async function ytLoad() {
+  const r = await fetch('youtube'); if (!r.ok) return;
+  const d = await r.json();
+  document.getElementById('yt_redirect').textContent = d.redirect_uri;
+  document.getElementById('yt_client').textContent = d.client ? '(загружен: ' + d.client_id.split('-')[0] + '…)' : '(ещё не загружен)';
+  document.getElementById('yt_connect').disabled = !d.client;
+  document.getElementById('yt_channels').innerHTML = d.channels.length
+    ? 'Подключены: ' + d.channels.map(c => `<b>${esc(c.title)}</b> <a href="#" onclick="ytOff('${esc(c.id)}');return false">отключить</a>`).join(' · ')
+    : 'Каналы ещё не подключены';
+}
+async function ytClient() {
+  const file = document.getElementById('yt_file').files[0]; if (!file) return;
+  const form = new FormData(); form.append('file', file);
+  const r = await fetch('youtube/client', {method:'POST', body:form});
+  document.getElementById('yt_msg').textContent = r.ok ? 'Ключ сохранён на сервере' : 'Ошибка: ' + ((await r.json()).detail || r.status);
+  document.getElementById('yt_file').value = ''; ytLoad();
+}
+async function ytOff(id) {
+  if (!confirm('Отключить канал? Приложение потеряет к нему доступ.')) return;
+  await fetch('youtube/channels/' + id, {method:'DELETE'}); ytLoad();
+}
+ytLoad();
 </script>
 </body>
 </html>
