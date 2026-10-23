@@ -68,6 +68,7 @@ class Job:
     previews: list[Path] = field(default_factory=list)   # filled by render()
     timecodes: str = ""                 # filled by render(): track list for the description
     warning: str = ""                   # filled by render(): something the user should know
+    checks: str = ""                    # filled by render(): video / sound lengths of the result
 
 
 Progress = Callable[[str, float], None]
@@ -716,6 +717,21 @@ def encode_seamless_aac(cycle: Path, dst: Path, duration: float, bitrate: str, t
 
 # ---------- assembly ----------
 
+def make_check_clips(job: Job) -> None:
+    """The first 3 minutes and the last minute as small files that open at once (a
+    10-hour file is slow to start in the browser), and both stream lengths,
+    to see that the sound runs to the end."""
+    out = job.output
+    for name, pos, length in (("start", ["-ss", "0"], 180), ("end", ["-sseof", "-60"], 60)):
+        _run(["ffmpeg", "-y", *pos, "-i", str(out), "-t", str(length), "-c", "copy",
+              "-movflags", "+faststart", str(out.with_name(f"check_{name}.mp4"))])
+    streams = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "stream=codec_type,duration",
+         "-of", "json", str(out)], capture_output=True, text=True).stdout
+    lens = {x.get("codec_type"): float(x.get("duration", 0)) for x in json.loads(streams).get("streams", [])}
+    job.checks = "Видео {} · звук {}".format(_clock(lens.get("video", 0)), _clock(lens.get("audio", 0)))
+
+
 def make_previews(seg: Path, seg_len: float, output: Path, count: int = 4) -> list[Path]:
     """Frames spread over the loop, 1280x720 JPEG, to pick a thumbnail from."""
     out = []
@@ -767,6 +783,8 @@ def _render_breathing(job: Job, s: RenderSettings, say: Progress, tmp: Path) -> 
     lst.write_text(f"file '{intro}'\n" + f"file '{black}'\n" * (math.ceil(s.duration / 10) + 1))
     _run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(lst), "-i", str(audio),
           "-map", "0:v", "-map", "1:a", "-c", "copy", "-t", str(s.duration), str(job.output)])
+    say("Делаю кусочки для проверки", 0.95)
+    make_check_clips(job)
     say("Готово", 1.0)
     return job.output
 
@@ -806,5 +824,7 @@ def render(job: Job, progress: Progress | None = None) -> Path:
         _run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(lst), "-i", str(audio),
               "-map", "0:v", "-map", "1:a", "-c", "copy", "-t", str(s.duration),
               str(job.output)])
+        say("Делаю кусочки для проверки", 0.95)
+        make_check_clips(job)
     say("Готово", 1.0)
     return job.output
