@@ -5,6 +5,7 @@ Run:  APP_PASSWORD=... uvicorn app:app --host 0.0.0.0 --port 8000
 
 from __future__ import annotations
 
+import html
 import json
 import os
 import queue
@@ -18,14 +19,15 @@ import uuid
 from dataclasses import asdict
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from render.drive import fetch_folder
 from render.breathing import parse_script
 from render.engine import Breath, Job, RenderSettings, make_check_clips, probe_duration, render
 from render.scripts import DEFAULT, PRESETS
+from render import youtube
 
 DATA = Path(os.environ.get("APP_DATA", Path(__file__).parent / "data"))
 PASSWORD = os.environ.get("APP_PASSWORD", "")
@@ -482,6 +484,72 @@ def version():
     return {"version": f.read_text().strip() if f.exists() else "unknown"}
 
 
+def _page(name: str) -> str:
+    return (Path(__file__).parent / "static" / name).read_text(encoding="utf-8")
+
+
+@app.get("/about", response_class=HTMLResponse)
+def about():
+    """Public: the app's home page for Google (OAuth consent screen, API audit)."""
+    return _page("about.html")
+
+
+@app.get("/privacy", response_class=HTMLResponse)
+def privacy():
+    """Public: privacy policy for Google."""
+    return _page("privacy.html")
+
+
+CHANNEL_ID = re.compile(r"^UC[\w-]{22}$")
+
+
+@app.get("/youtube", dependencies=[Depends(check)])
+def youtube_state(request: Request):
+    c = youtube.client()
+    return {"client": bool(c), "client_id": c["client_id"] if c else "",
+            "redirect_uri": youtube.redirect_uri(request.url.netloc), "channels": youtube.channels()}
+
+
+@app.post("/youtube/client", dependencies=[Depends(check)])
+async def youtube_client(file: UploadFile = File(...)):
+    raw = await file.read(64 * 1024)
+    try:
+        return {"client_id": youtube.save_client(raw)}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/youtube/connect", dependencies=[Depends(check)])
+def youtube_connect(request: Request):
+    try:
+        return RedirectResponse(youtube.auth_url(youtube.redirect_uri(request.url.netloc)))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/youtube/callback", response_class=HTMLResponse, dependencies=[Depends(check)])
+def youtube_callback(request: Request, state: str = "", code: str = "", error: str = ""):
+    if error:
+        text = f"Доступ не выдан ({error}). Можно попробовать ещё раз."
+    else:
+        try:
+            ch = youtube.finish(code, state, youtube.redirect_uri(request.url.netloc))
+            text = f"Канал «{ch['title']}» подключён."
+        except ValueError as e:
+            text = f"Не получилось: {e}"
+    return ('<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+            '<body style="font:17px/1.5 system-ui,sans-serif;max-width:560px;margin:40px auto;padding:0 16px">'
+            f'<p>{html.escape(text)}</p><p><a href="/">Вернуться в приложение</a></p>')
+
+
+@app.delete("/youtube/channels/{channel_id}", dependencies=[Depends(check)])
+def youtube_disconnect(channel_id: str):
+    if not CHANNEL_ID.match(channel_id):
+        raise HTTPException(404)
+    youtube.disconnect(channel_id)
+    return {"ok": True}
+
+
 @app.get("/", response_class=HTMLResponse, dependencies=[Depends(check)])
 def index():
-    return (Path(__file__).parent / "static" / "index.html").read_text(encoding="utf-8")
+    return _page("index.html")

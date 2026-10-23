@@ -4,5 +4,5 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
-ENV APP_DATA=/data
+ENV APP_DATA=/data YOUTUBE_SECRETS=/secrets
 CMD ["nice", "-n", "15", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
