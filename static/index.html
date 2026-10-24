@@ -24,6 +24,10 @@
   a { color:var(--accent); }
   .thumbs { display:grid; grid-template-columns:repeat(4,1fr); gap:6px; margin:8px 0; } .thumbs img { width:100%; border-radius:6px; display:block; }
   @media (max-width:520px) { main { padding:16px 12px 40px; } .card { padding:14px; } .wide { grid-column:1 / -1; } }
+  dialog { width:min(620px, calc(100vw - 32px)); border:1px solid var(--line); border-radius:14px; background:var(--card); color:var(--text); padding:18px; }
+  dialog::backdrop { background:rgba(0,0,0,.4); }
+  dialog input[type=text], dialog input[type=datetime-local] { width:100%; padding:10px; border:1px solid var(--line); border-radius:10px; background:var(--bg); color:var(--text); font:inherit; }
+  dialog .thumbs img { cursor:pointer; border:3px solid transparent; } dialog .thumbs img.on { border-color:var(--accent); }
   textarea { width:100%; margin-top:6px; padding:8px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--text); font:13px/1.4 ui-monospace, monospace; }
 </style>
 </head>
@@ -101,6 +105,26 @@
     <p class="muted" id="yt_msg"></p>
   </div>
 </main>
+<dialog id="yt_dlg">
+  <form id="yt_form" method="dialog">
+    <h2 style="margin:0 0 4px;font-size:18px">Загрузка на YouTube</h2>
+    <div class="muted" id="yt_video"></div>
+    <label>Канал</label><select name="channel" id="yt_channel" onchange="ytPlaylists()"></select>
+    <label>Название <span class="hint">до 100 символов</span></label><input type="text" name="title" maxlength="100" required>
+    <label>Описание</label><textarea name="description" rows="6" style="font:15px/1.4 inherit"></textarea>
+    <label>Теги <span class="hint">через запятую</span></label><input type="text" name="tags">
+    <label>Опубликовать <span class="hint">по Москве; пусто = оставить приватным</span></label><input type="datetime-local" name="publish_at">
+    <label>Плейлист</label><select name="playlist" id="yt_playlist"><option value="">Без плейлиста</option></select>
+    <label>Обложка <span class="hint">кадр из видео или свой файл JPEG до 2 МБ</span></label>
+    <div class="thumbs" id="yt_thumbs"></div><input type="hidden" name="thumb" value="0">
+    <input type="file" name="thumb_file" accept="image/jpeg">
+    <label style="font-weight:400"><input type="checkbox" name="synthetic" value="true" checked> Видео создано с помощью ИИ (раскрытие для YouTube)</label>
+    <p class="muted">Не для детей · категория «Люди и блоги» · язык английский. Видео загружается приватным и само станет публичным в указанное время.</p>
+    <button type="button" onclick="ytSend()">Загрузить</button>
+    <button type="button" onclick="document.getElementById('yt_dlg').close()" style="background:var(--line);color:var(--text);margin-top:8px">Отмена</button>
+    <p class="muted" id="yt_send_msg"></p>
+  </form>
+</dialog>
 <script>
 const f = document.getElementById('f'), msg = document.getElementById('msg'), go = document.getElementById('go');
 const CHUNK = 4 * 1024 * 1024;  // small pieces: the proxy cuts requests longer than about a minute
@@ -175,14 +199,14 @@ async function cleanup() {
   alert(`Освобождено ${r.freed_gb} ГБ, свободно ${r.free_gb} ГБ`); load();
 }
 async function del(id) { if (confirm('Удалить видео и файлы?')) { await fetch('jobs/' + id, {method:'DELETE'}); load(); } }
-let lastJobs = '';
+let lastJobs = '', lastList = [];
 async function load() {
   showDisk();
   const r = await fetch('jobs'); if (!r.ok) return;
   const text = await r.text(), box = document.getElementById('jobs');
   if (text === lastJobs) return;  // redraw only on change: keeps opened frames open, no image re-requests
   lastJobs = text;
-  const rows = JSON.parse(text);
+  const rows = JSON.parse(text); lastList = rows;
   if (!rows.length) { box.textContent = 'Пока пусто'; return; }
   box.innerHTML = rows.map(j => `<div class="job">
     <b>${esc(j.visual)}</b> · ${j.tracks ? j.tracks + ' треков' : 'только фон'} · ${j.settings.duration / 3600} ч
@@ -194,6 +218,7 @@ async function load() {
     ${j.file ? `<div class="muted">В браузере для загрузки: /videos/${esc(j.id)}/${esc(j.file)}</div>` : ''}
     ${j.previews ? `<details><summary>Кадры для обложки</summary><div class="thumbs">${[...Array(j.previews)].map((_, i) => `<a href="jobs/${j.id}/preview/${i + 1}?download=1" title="Скачать превью"><img src="jobs/${j.id}/preview/${i + 1}" alt="Превью ${i + 1}" loading="lazy"></a>`).join('')}</div></details>` : ''}
     ${j.timecodes ? `<details><summary>Таймкоды для описания</summary><textarea readonly rows="8">${esc(j.timecodes)}</textarea><a href="#" onclick="navigator.clipboard.writeText(this.previousElementSibling.value);this.textContent='Скопировано';return false">Скопировать</a></details>` : ''}
+    ${j.file ? ytLine(j) : ''}
     ${j.status !== 'работает' ? `<a href="#" onclick="del('${j.id}');return false">Удалить</a>` : ''}
   </div>`).join('');
 }
@@ -204,6 +229,7 @@ async function ytLoad() {
   document.getElementById('yt_redirect').textContent = d.redirect_uri;
   document.getElementById('yt_client').textContent = d.client ? '(загружен: ' + d.client_id.split('-')[0] + '…)' : '(ещё не загружен)';
   document.getElementById('yt_connect').disabled = !d.client;
+  ytChannels = d.channels; lastJobs = ''; load();
   document.getElementById('yt_channels').innerHTML = d.channels.length
     ? 'Подключены: ' + d.channels.map(c => `<b>${esc(c.title)}</b> <a href="#" onclick="ytOff('${esc(c.id)}');return false">отключить</a>`).join(' · ')
     : 'Каналы ещё не подключены';
@@ -218,6 +244,43 @@ async function ytClient() {
 async function ytOff(id) {
   if (!confirm('Отключить канал? Приложение потеряет к нему доступ.')) return;
   await fetch('youtube/channels/' + id, {method:'DELETE'}); ytLoad();
+}
+let ytChannels = [], ytJob = null;
+function ytLine(j) {
+  const y = j.yt;
+  if (y && y.status === 'загружается') return `<div>YouTube: загружается на «${esc(y.channel)}» ${Math.round(y.progress * 100)}%</div>`;
+  if (y && y.status === 'загружено') return `<div class="st-готово">YouTube: загружено на «${esc(y.channel)}»${y.publish_at ? ', выйдет ' + esc(y.publish_at.replace('T', ' ')) + ' МСК' : ' (приватно)'} · <a href="https://studio.youtube.com/video/${esc(y.id)}/edit" target="_blank">открыть в Студии</a>${y.error ? '<div class="muted">⚠ ' + esc(y.error) + '</div>' : ''}</div>`;
+  const err = y && y.status === 'ошибка' ? `<div class="st-ошибка">YouTube: ${esc(y.error)}</div>` : '';
+  return err + (ytChannels.length ? `<div><a href="#" onclick="ytOpen('${j.id}');return false">Загрузить на YouTube</a></div>` : '');
+}
+function ytOpen(id) {
+  const j = lastList.find(x => x.id === id); if (!j) return;
+  ytJob = j; const f = document.getElementById('yt_form');
+  f.reset(); f.thumb.value = 0;
+  document.getElementById('yt_video').textContent = j.file + (j.size_gb ? ` · ${j.size_gb} ГБ` : '');
+  document.getElementById('yt_channel').innerHTML = ytChannels.map(c => `<option value="${esc(c.id)}">${esc(c.title)}</option>`).join('');
+  document.getElementById('yt_thumbs').innerHTML = [...Array(j.previews)].map((_, i) => `<img src="jobs/${j.id}/preview/${i + 1}" onclick="ytThumb(this, ${i + 1})" loading="lazy">`).join('');
+  if (j.timecodes) f.description.value = j.timecodes;
+  document.getElementById('yt_send_msg').textContent = '';
+  ytPlaylists(); document.getElementById('yt_dlg').showModal();
+}
+function ytThumb(img, n) {
+  document.querySelectorAll('#yt_thumbs img').forEach(x => x.classList.remove('on'));
+  img.classList.add('on'); document.getElementById('yt_form').thumb.value = n;
+}
+async function ytPlaylists() {
+  const sel = document.getElementById('yt_playlist'); sel.innerHTML = '<option value="">Без плейлиста</option>';
+  const r = await fetch('youtube/channels/' + document.getElementById('yt_channel').value + '/playlists'); if (!r.ok) return;
+  sel.innerHTML += (await r.json()).map(p => `<option value="${esc(p.id)}">${esc(p.title)}</option>`).join('');
+}
+async function ytSend() {
+  const f = document.getElementById('yt_form'), m = document.getElementById('yt_send_msg');
+  if (!f.title.value.trim()) { m.textContent = 'Впишите название'; return; }
+  const form = new FormData(f); if (!f.synthetic.checked) form.delete('synthetic');
+  m.textContent = 'Отправляю…';
+  const r = await fetch(`jobs/${ytJob.id}/youtube`, {method:'POST', body:form});
+  if (!r.ok) { m.textContent = 'Ошибка: ' + ((await r.json()).detail || r.status); return; }
+  document.getElementById('yt_dlg').close(); load();
 }
 ytLoad();
 </script>

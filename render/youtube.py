@@ -156,3 +156,119 @@ def disconnect(channel_id: str) -> None:
     except (ValueError, KeyError):
         pass  # already revoked on Google's side
     f.unlink()
+
+
+UPLOAD_URL = "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status"
+THUMB_URL = "https://www.googleapis.com/upload/youtube/v3/thumbnails/set"
+CHUNK = 64 * 1024 * 1024  # a multiple of 256 KB, as resumable uploads require
+TOKEN_LIFE = 45 * 60  # Google tokens last an hour: take a fresh one well before
+
+
+class ApiError(ValueError):
+    def __init__(self, code: int, text: str):
+        super().__init__(f"YouTube ответил {code}: {text}")
+        self.code = code
+
+
+class _Token:
+    """Keeps a fresh access token for a long upload."""
+
+    def __init__(self, channel_id: str):
+        self.channel_id, self.value, self.at = channel_id, "", 0.0
+
+    def __str__(self) -> str:
+        if time.time() - self.at > TOKEN_LIFE:
+            self.value, self.at = access_token(self.channel_id), time.time()
+        return self.value
+
+
+def _call(method: str, url: str, token, body: bytes | None = None, headers: dict | None = None,
+          ok=(200, 201)) -> tuple[int, dict, bytes]:
+    h = {"Authorization": f"Bearer {token}", **(headers or {})}
+    req = urllib.request.Request(url, data=body, method=method, headers=h)
+    try:
+        with urllib.request.urlopen(req, timeout=600) as r:
+            return r.status, dict(r.headers), r.read()
+    except urllib.error.HTTPError as e:
+        data = e.read()
+        if e.code in ok:
+            return e.code, dict(e.headers), data
+        raise ApiError(e.code, data.decode(errors="replace")[:400])
+
+
+def _json(token, method: str, url: str, data: dict) -> dict:
+    _, _, raw = _call(method, url, token, json.dumps(data).encode(),
+                      {"Content-Type": "application/json; charset=utf-8"})
+    return json.loads(raw or b"{}")
+
+
+def playlists(channel_id: str) -> list[dict]:
+    t = access_token(channel_id)
+    items = _get(f"{API}/playlists?part=snippet&mine=true&maxResults=50", t).get("items") or []
+    return [{"id": p["id"], "title": p["snippet"]["title"]} for p in items]
+
+
+def upload(channel_id: str, video: Path, meta: dict, thumbnail: Path | None, playlist: str,
+           progress) -> tuple[str, str]:
+    """Uploads the video in pieces (resumable: a dropped connection continues
+    where it stopped), then sets the thumbnail and adds it to the playlist.
+    Returns the video id and what did not work after the video was in."""
+    token = _Token(channel_id)
+    size = video.stat().st_size
+    status = {"privacyStatus": "private", "selfDeclaredMadeForKids": False,
+              "containsSyntheticMedia": bool(meta.get("synthetic"))}
+    if meta.get("publish_at"):
+        status["publishAt"] = meta["publish_at"]
+    body = {"snippet": {"title": meta["title"], "description": meta.get("description", ""),
+                        "tags": meta.get("tags", []), "categoryId": meta.get("category", "22"),
+                        "defaultLanguage": meta.get("language", "en"),
+                        "defaultAudioLanguage": meta.get("language", "en")},
+            "status": status}
+    _, headers, _ = _call("POST", UPLOAD_URL, token, json.dumps(body).encode(), {
+        "Content-Type": "application/json; charset=utf-8",
+        "X-Upload-Content-Type": "video/mp4", "X-Upload-Content-Length": str(size)})
+    session = {k.lower(): v for k, v in headers.items()}["location"]
+
+    sent, fails, result = 0, 0, None
+    with video.open("rb") as f:
+        while result is None:
+            f.seek(sent)
+            piece = f.read(CHUNK)
+            end = sent + len(piece) - 1
+            try:
+                code, h, raw = _call("PUT", session, token, piece,
+                                     {"Content-Range": f"bytes {sent}-{end}/{size}"}, ok=(200, 201, 308))
+                fails = 0
+            except (ValueError, OSError) as e:
+                fails += 1
+                if fails > 8 or (isinstance(e, ApiError) and e.code < 500):
+                    raise  # a refused request will not get better by retrying
+                time.sleep(min(60, 5 * fails))
+                try:  # ask how much YouTube already has, then continue from there
+                    code, h, raw = _call("PUT", session, token, b"",
+                                         {"Content-Range": f"bytes */{size}"}, ok=(200, 201, 308))
+                except (ValueError, OSError):
+                    continue
+            if code in (200, 201):
+                result = json.loads(raw)
+                break
+            got = {k.lower(): v for k, v in h.items()}.get("range")
+            sent = int(got.split("-")[1]) + 1 if got else 0
+            progress(sent / size)
+    video_id = result["id"]
+    progress(1.0)
+
+    problems = []  # the video is already in: report these, don't fail the upload
+    if thumbnail and thumbnail.exists():
+        try:
+            _call("POST", f"{THUMB_URL}?videoId={video_id}", token, thumbnail.read_bytes(),
+                  {"Content-Type": "image/jpeg"})
+        except (ValueError, OSError) as e:
+            problems.append(f"обложка не поставилась ({e})")
+    if playlist:
+        try:
+            _json(token, "POST", f"{API}/playlistItems?part=snippet", {
+                "snippet": {"playlistId": playlist, "resourceId": {"kind": "youtube#video", "videoId": video_id}}})
+        except (ValueError, OSError) as e:
+            problems.append(f"в плейлист не добавилось ({e})")
+    return video_id, "; ".join(problems)[:500]
