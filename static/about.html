@@ -11,12 +11,17 @@
   main { max-width:680px; margin:0 auto; padding:32px 16px 60px; }
   h1 { font-size:28px; margin:0 0 6px; } .sub { color:var(--muted); margin:0 0 24px; }
   h2 { font-size:19px; margin:28px 0 8px; } a { color:var(--accent); }
+  .yt { display:flex; align-items:center; gap:10px; margin:0 0 24px; font-weight:600; }
+  .yt svg { flex:none; }
+  footer { margin-top:36px; padding-top:14px; border-top:1px solid var(--muted); color:var(--muted); font-size:15px; }
 </style>
 </head>
 <body>
 <main>
   <h1>Relax Factory Uploader</h1>
   <p class="sub">A private, single-user tool of an independent YouTube creator.</p>
+  <p class="yt"><svg width="34" height="24" viewBox="0 0 34 24" aria-hidden="true"><rect width="34" height="24" rx="6" fill="#ff0000"/><path d="M13.5 6.5v11l9.5-5.5z" fill="#fff"/></svg>
+    <span>Uploads to YouTube · uses YouTube API Services</span></p>
 
   <p>Relax Factory is a small web app on my own server. I use it to render long ambient videos
   (cozy cabin scenes with fireplace, rain and snow sounds) from clips and sounds I make myself,
@@ -35,6 +40,11 @@
   <h2>Data</h2>
   <p>The app does not collect, store or share any data about viewers or other people.
   See the <a href="/privacy">privacy policy</a>.</p>
+  <footer>
+    <a href="/privacy">Privacy Policy</a> · <a href="/terms">Terms of Use</a> ·
+    <a href="https://www.youtube.com/t/terms">YouTube Terms of Service</a> ·
+    <a href="https://policies.google.com/privacy">Google Privacy Policy</a>
+  </footer>
 </main>
 </body>
 </html>

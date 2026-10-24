@@ -500,6 +500,12 @@ def privacy():
     return _page("privacy.html")
 
 
+@app.get("/terms", response_class=HTMLResponse)
+def terms():
+    """Public: terms of use for Google."""
+    return _page("terms.html")
+
+
 CHANNEL_ID = re.compile(r"^UC[\w-]{22}$")
 
 
