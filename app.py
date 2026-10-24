@@ -17,6 +17,7 @@ import threading
 import time
 import uuid
 from dataclasses import asdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -140,7 +141,8 @@ def save_job(job_id: str, info: dict) -> None:
     meta = {"status": info["status"], "step": info["step"], "seconds": info.get("seconds"),
             "created": info.get("created"), "label": _label(info), "tracks": len(job.tracks),
             "output": job.output.name, "previews": [p.name for p in job.previews],
-            "timecodes": job.timecodes, "warning": job.warning, "checks": job.checks, "settings": asdict(job.settings)}
+            "timecodes": job.timecodes, "warning": job.warning, "checks": job.checks, "settings": asdict(job.settings),
+            "youtube": info.get("yt")}
     try:
         (DATA / job_id / "job.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
     except OSError:
@@ -180,7 +182,10 @@ def load_jobs() -> None:
         jobs[folder.name] = {"job": job, "status": meta["status"], "step": meta["step"],
                              "progress": 1.0, "seconds": meta.get("seconds"),
                              "created": meta.get("created"), "label": meta["label"],
-                             "tracks": meta.get("tracks", 0)}
+                             "tracks": meta.get("tracks", 0), "yt": meta.get("youtube")}
+        yt = jobs[folder.name]["yt"]
+        if yt and yt.get("status") == "загружается":
+            yt["status"], yt["error"] = "ошибка", "Прервано: сервер обновлялся. Загрузите заново"
 
 
 load_jobs()
@@ -385,6 +390,7 @@ def list_jobs():
             "timecodes": job.timecodes if info["status"] == "готово" else "",
             "warning": job.warning,
             "checks": job.checks if info["status"] == "готово" else "",
+            "yt": info.get("yt"),
             "settings": asdict(job.settings),
         })
     return rows
@@ -546,6 +552,89 @@ def youtube_callback(request: Request, state: str = "", code: str = "", error: s
     return ('<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
             '<body style="font:17px/1.5 system-ui,sans-serif;max-width:560px;margin:40px auto;padding:0 16px">'
             f'<p>{html.escape(text)}</p><p><a href="/">Вернуться в приложение</a></p>')
+
+
+@app.get("/youtube/channels/{channel_id}/playlists", dependencies=[Depends(check)])
+def youtube_playlists(channel_id: str):
+    if not CHANNEL_ID.match(channel_id):
+        raise HTTPException(404)
+    try:
+        return youtube.playlists(channel_id)
+    except (ValueError, OSError) as e:
+        raise HTTPException(400, str(e))
+
+
+MSK = timezone(timedelta(hours=3))
+
+
+def _publish_at(local: str) -> str:
+    """'2026-10-25T18:00' in Moscow time -> RFC 3339 in UTC, as YouTube wants."""
+    when = datetime.fromisoformat(local).replace(tzinfo=MSK)
+    if when < datetime.now(MSK) + timedelta(minutes=30):
+        raise HTTPException(400, "Время публикации должно быть хотя бы через 30 минут")
+    return when.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
+def _upload_worker(job_id: str, channel: str, meta: dict, thumb: Path | None, playlist: str) -> None:
+    info = jobs[job_id]
+    yt = info["yt"]
+    def progress(x: float) -> None:
+        yt["progress"] = round(x, 3)
+    try:
+        yt["id"], yt["error"] = youtube.upload(channel, info["job"].output, meta, thumb, playlist, progress)
+        yt["status"] = "загружено"
+    except Exception as e:  # shown under the video; the file stays for another try
+        yt["status"], yt["error"] = "ошибка", str(e)[:500]
+    save_job(job_id, info)
+
+
+@app.post("/jobs/{job_id}/youtube", dependencies=[Depends(check)])
+async def youtube_upload(
+    job_id: str,
+    channel: str = Form(...),
+    title: str = Form(...),
+    description: str = Form(""),
+    tags: str = Form(""),
+    publish_at: str = Form(""),
+    playlist: str = Form(""),
+    thumb: int = Form(0),
+    thumb_file: UploadFile | None = File(None),
+    synthetic: bool = Form(False),
+):
+    info = jobs.get(job_id)
+    if not info or info["status"] != "готово" or not info["job"].output.exists():
+        raise HTTPException(404, "Нет готового видео")
+    if (info.get("yt") or {}).get("status") == "загружается":
+        raise HTTPException(400, "Это видео уже загружается")
+    if not CHANNEL_ID.match(channel) or channel not in {c["id"] for c in youtube.channels()}:
+        raise HTTPException(400, "Канал не подключён")
+    title = title.strip()
+    if not title or len(title) > 100 or "<" in title or ">" in title:
+        raise HTTPException(400, "Название: от 1 до 100 символов, без < и >")
+    if len(description) > 5000:
+        raise HTTPException(400, "Описание длиннее 5000 символов")
+    tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+    if sum(len(t) + 1 for t in tag_list) > 500:
+        raise HTTPException(400, "Теги вместе длиннее 500 символов")
+    meta = {"title": title, "description": description.replace("<", "‹").replace(">", "›"),
+            "tags": tag_list, "synthetic": synthetic}
+    if publish_at:
+        meta["publish_at"] = _publish_at(publish_at)
+    cover = None
+    if thumb_file and thumb_file.filename:
+        raw = await thumb_file.read(2 * 1024 * 1024 + 1)
+        if len(raw) > 2 * 1024 * 1024 or raw[:3] != b"\xff\xd8\xff":
+            raise HTTPException(400, "Обложка: JPEG до 2 МБ")
+        cover = _job_dir(job_id) / "cover.jpg"
+        cover.write_bytes(raw)
+    elif 1 <= thumb <= len(info["job"].previews):
+        cover = info["job"].previews[thumb - 1]
+    info["yt"] = {"status": "загружается", "progress": 0.0, "id": None, "error": "",
+                  "channel": next(c["title"] for c in youtube.channels() if c["id"] == channel),
+                  "publish_at": publish_at}
+    save_job(job_id, info)
+    threading.Thread(target=_upload_worker, args=(job_id, channel, meta, cover, playlist), daemon=True).start()
+    return {"ok": True}
 
 
 @app.delete("/youtube/channels/{channel_id}", dependencies=[Depends(check)])
