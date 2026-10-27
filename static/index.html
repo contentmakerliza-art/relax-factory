@@ -198,6 +198,17 @@ async function cleanup() {
   const r = await (await fetch('jobs/cleanup', {method:'POST', body:f})).json();
   alert(`Освобождено ${r.freed_gb} ГБ, свободно ${r.free_gb} ГБ`); load();
 }
+async function shareLink(id) {
+  const r = await fetch(`jobs/${id}/share`, {method:'POST'});
+  if (!r.ok) { alert('Не получилось: ' + r.status); return; }
+  const d = await r.json();
+  try { await navigator.clipboard.writeText(d.url); } catch (err) {}
+  prompt(`Ссылка скопирована, работает ${d.hours} ч. Любой, у кого она есть, может скачать видео:`, d.url);
+}
+async function unshare(id) {
+  if (!confirm('Закрыть все ссылки без пароля на это видео?')) return;
+  await fetch(`jobs/${id}/share`, {method:'DELETE'}); alert('Ссылки закрыты');
+}
 async function del(id) { if (confirm('Удалить видео и файлы?')) { await fetch('jobs/' + id, {method:'DELETE'}); load(); } }
 let lastJobs = '', lastList = [];
 async function load() {
@@ -219,6 +230,7 @@ async function load() {
     ${j.file ? `<div class="muted">В браузере для загрузки: /videos/${esc(j.id)}/${esc(j.file)}</div>` : ''}
     ${j.previews ? `<details><summary>Кадры для обложки</summary><div class="thumbs">${[...Array(j.previews)].map((_, i) => `<a href="jobs/${j.id}/preview/${i + 1}?download=1" title="Скачать превью"><img src="jobs/${j.id}/preview/${i + 1}" alt="Превью ${i + 1}" loading="lazy"></a>`).join('')}</div></details>` : ''}
     ${j.timecodes ? `<details><summary>Таймкоды для описания</summary><textarea readonly rows="8">${esc(j.timecodes)}</textarea><a href="#" onclick="navigator.clipboard.writeText(this.previousElementSibling.value);this.textContent='Скопировано';return false">Скопировать</a></details>` : ''}
+    ${j.file ? `<div><a href="#" onclick="shareLink('${j.id}');return false">Ссылка без пароля на 24 ч</a> <span class="muted">для Upload-Post</span> · <a href="#" onclick="unshare('${j.id}');return false">закрыть ссылки</a></div>` : ''}
     ${j.file ? ytLine(j) : ''}
     ${j.status !== 'работает' ? `<a href="#" onclick="del('${j.id}');return false">Удалить</a>` : ''}
   </div>`).join('');
