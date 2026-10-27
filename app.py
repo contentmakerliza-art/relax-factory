@@ -430,6 +430,53 @@ def kit_file(job_id: str, name: str):
     return FileResponse(f, media_type="application/json" if f.suffix == ".json" else "application/octet-stream")
 
 
+SHARES = DATA / "shares.json"
+SHARE_HOURS = 24
+
+
+def _shares() -> dict:
+    """Public links: token -> {job, expires}; expired ones dropped."""
+    try:
+        found = json.loads(SHARES.read_text())
+    except (OSError, ValueError):
+        return {}
+    return {t: v for t, v in found.items() if v["expires"] > time.time()}
+
+
+@app.post("/jobs/{job_id}/share", dependencies=[Depends(check)])
+def share(job_id: str, request: Request):
+    """A link to the finished video that opens without the password, for
+    24 hours: a service such as Upload-Post downloads the video by it."""
+    info = jobs.get(job_id)
+    if not info or info["status"] != "готово":
+        raise HTTPException(404)
+    links = _shares()
+    token = secrets.token_urlsafe(24)
+    links[token] = {"job": job_id, "expires": time.time() + SHARE_HOURS * 3600}
+    SHARES.write_text(json.dumps(links))
+    name = info["job"].output.name
+    return {"url": f"https://{request.url.netloc}/share/{token}/{name}", "hours": SHARE_HOURS}
+
+
+@app.delete("/jobs/{job_id}/share", dependencies=[Depends(check)])
+def unshare(job_id: str):
+    """Close every public link of this video at once."""
+    SHARES.write_text(json.dumps({t: v for t, v in _shares().items() if v["job"] != job_id}))
+    return {"ok": True}
+
+
+@app.api_route("/share/{token}/{name}", methods=["GET", "HEAD"])
+def shared_video(token: str, name: str):
+    """No password: the long random token is the key. Range requests work,
+    so a download that breaks can go on where it stopped."""
+    link = _shares().get(token)
+    info = jobs.get(link["job"]) if link else None
+    if not info or info["status"] != "готово" or not info["job"].output.exists():
+        raise HTTPException(404)
+    out: Path = info["job"].output
+    return FileResponse(out, filename=out.name, media_type="video/mp4")
+
+
 @app.get("/jobs/{job_id}/preview/{n}", dependencies=[Depends(check)])
 def preview(job_id: str, n: int, download: bool = False):
     info = jobs.get(job_id)
