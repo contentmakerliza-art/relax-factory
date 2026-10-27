@@ -93,7 +93,7 @@
     <p class="muted" id="msg"></p>
   </form>
 
-  <div class="card"><h2 style="margin:0 0 6px;font-size:18px">Очередь</h2><div class="muted" style="margin-bottom:6px"><span id="disk"></span> · <a href="#" onclick="cleanup();return false">Удалить старые</a></div><div id="jobs" class="muted">Пока пусто</div></div>
+  <div class="card"><h2 style="margin:0 0 6px;font-size:18px">Очередь</h2><div class="muted" style="margin-bottom:6px"><span id="disk"></span> · <a href="#" onclick="cleanup();return false">Удалить старые</a><br><span id="build_folder"></span> · <a href="#" onclick="pickFolder();return false">выбрать папку</a></div><div id="jobs" class="muted">Пока пусто</div></div>
 
   <div class="card"><h2 style="margin:0 0 6px;font-size:18px">YouTube</h2>
     <div class="muted">Адрес перенаправления для Google Cloud: <b id="yt_redirect"></b><br>
@@ -285,6 +285,44 @@ async function ytSend() {
 }
 ytLoad();
 
+// The folder for built videos is chosen once and kept in the browser: later
+// builds write there without the save window (which an assistant can't click).
+function folderDb(mode, fn) {
+  return new Promise((ok, fail) => {
+    const req = indexedDB.open('relax-factory', 1);
+    req.onupgradeneeded = () => req.result.createObjectStore('kv');
+    req.onerror = () => fail(req.error);
+    req.onsuccess = () => {
+      const tx = req.result.transaction('kv', mode), r = fn(tx.objectStore('kv'));
+      tx.oncomplete = () => ok(r && r.result); tx.onerror = () => fail(tx.error);
+    };
+  });
+}
+async function pickFolder() {
+  if (!window.showDirectoryPicker) { alert('Выбор папки работает в Chrome на компьютере.'); return; }
+  try {
+    const dir = await window.showDirectoryPicker({ id: 'relax-videos', mode: 'readwrite' });
+    await folderDb('readwrite', st => st.put(dir, 'folder'));
+  } catch (err) { return; }
+  showFolder();
+}
+async function showFolder() {
+  const el = document.getElementById('build_folder'); if (!el) return;
+  let dir = null;
+  try { dir = await folderDb('readonly', st => st.get('folder')); } catch (err) {}
+  el.textContent = dir ? `Папка для сборки: «${dir.name}»` : 'Папка для сборки не выбрана: каждый раз будет окно сохранения';
+}
+async function folderFile(name) {
+  let dir = null;
+  try { dir = await folderDb('readonly', st => st.get('folder')); } catch (err) { return null; }
+  if (!dir) return null;
+  let perm = await dir.queryPermission({ mode: 'readwrite' });
+  if (perm === 'prompt') { try { perm = await dir.requestPermission({ mode: 'readwrite' }); } catch (err) {} }
+  if (perm !== 'granted') return null;
+  return dir.getFileHandle(name, { create: true });
+}
+showFolder();
+
 // ---------- building the long video on this computer ----------
 // The server keeps the loop, the sound and a byte map of the finished video:
 // the same file is put together here, so only a small part is downloaded.
@@ -315,10 +353,12 @@ async function fetchAll(url, onBytes) {
 async function buildHere(id) {
   const j = lastList.find(x => x.id === id), say = t => { const el = document.getElementById('build_' + id); if (el) el.textContent = t; };
   if (!window.showSaveFilePicker) { alert('Сборка работает в Chrome на компьютере. Откройте приложение в Chrome.'); return; }
-  let handle;
-  try {
-    handle = await window.showSaveFilePicker({ suggestedName: j.file, types: [{ description: 'Видео MP4', accept: { 'video/mp4': ['.mp4'] } }] });
-  } catch (err) { return; }  // the window was closed
+  let handle = await folderFile(j.file);  // the chosen folder: no window at all
+  if (!handle) {
+    try {
+      handle = await window.showSaveFilePicker({ suggestedName: j.file, types: [{ description: 'Видео MP4', accept: { 'video/mp4': ['.mp4'] } }] });
+    } catch (err) { return; }  // the window was closed
+  }
   try {
     const base = `jobs/${id}/kit/`;
     const map = await (await fetch(base + 'map.json')).json();
