@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run by cron every 5 minutes: if the repository has new commits, pull them
-# and rebuild the container. Waits while a video is rendering.
+# and rebuild the container. Waits while a video is rendering or Upload-Post
+# is downloading one.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 DATA=/var/lib/relax-factory
@@ -10,6 +11,7 @@ flock -n 9 || exit 0
 git fetch -q origin main
 [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] && exit 0
 [ -f "$DATA/busy" ] && exit 0
+[ -f "$DATA/uploading" ] && exit 0  # Upload-Post is downloading a video by its link
 
 echo "$(date -Is) updating $(git rev-parse --short HEAD) -> $(git rev-parse --short origin/main)"
 git merge -q --ff-only origin/main

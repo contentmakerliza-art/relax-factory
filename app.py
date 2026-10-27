@@ -28,7 +28,7 @@ from render.drive import fetch_folder
 from render.breathing import parse_script
 from render.engine import Breath, Job, RenderSettings, kit_dir, make_check_clips, probe_duration, render
 from render.scripts import DEFAULT, PRESETS
-from render import youtube
+from render import uploadpost, youtube
 
 DATA = Path(os.environ.get("APP_DATA", Path(__file__).parent / "data"))
 PASSWORD = os.environ.get("APP_PASSWORD", "")
@@ -142,7 +142,7 @@ def save_job(job_id: str, info: dict) -> None:
             "created": info.get("created"), "label": _label(info), "tracks": len(job.tracks),
             "output": job.output.name, "previews": [p.name for p in job.previews],
             "timecodes": job.timecodes, "warning": job.warning, "checks": job.checks, "settings": asdict(job.settings),
-            "youtube": info.get("yt")}
+            "youtube": info.get("yt"), "uploadpost": info.get("up")}
     try:
         (DATA / job_id / "job.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
     except OSError:
@@ -182,7 +182,8 @@ def load_jobs() -> None:
         jobs[folder.name] = {"job": job, "status": meta["status"], "step": meta["step"],
                              "progress": 1.0, "seconds": meta.get("seconds"),
                              "created": meta.get("created"), "label": meta["label"],
-                             "tracks": meta.get("tracks", 0), "yt": meta.get("youtube")}
+                             "tracks": meta.get("tracks", 0), "yt": meta.get("youtube"),
+                             "up": meta.get("uploadpost")}
         yt = jobs[folder.name]["yt"]
         if yt and yt.get("status") == "загружается":
             yt["status"], yt["error"] = "ошибка", "Прервано: сервер обновлялся. Загрузите заново"
@@ -393,6 +394,7 @@ def list_jobs():
             "warning": job.warning,
             "checks": job.checks if info["status"] == "готово" else "",
             "yt": info.get("yt"),
+            "up": {k: v for k, v in info["up"].items() if k != "token"} if info.get("up") else None,
             "settings": asdict(job.settings),
         })
     return rows
@@ -458,6 +460,20 @@ def share(job_id: str, request: Request):
     return {"url": f"https://{request.url.netloc}/share/{token}/{name}", "hours": SHARE_HOURS}
 
 
+def _new_share(job_id: str, until: float) -> str:
+    links = _shares()
+    token = secrets.token_urlsafe(24)
+    links[token] = {"job": job_id, "expires": until}
+    SHARES.write_text(json.dumps(links))
+    return token
+
+
+def _close_share(token: str) -> None:
+    links = _shares()
+    if links.pop(token, None):
+        SHARES.write_text(json.dumps(links))
+
+
 @app.delete("/jobs/{job_id}/share", dependencies=[Depends(check)])
 def unshare(job_id: str):
     """Close every public link of this video at once."""
@@ -473,8 +489,13 @@ def shared_video(token: str, name: str):
     info = jobs.get(link["job"]) if link else None
     if not info or info["status"] != "готово" or not info["job"].output.exists():
         raise HTTPException(404)
-    out: Path = info["job"].output
-    return FileResponse(out, filename=out.name, media_type="video/mp4")
+    job: Job = info["job"]
+    if m := re.fullmatch(r"preview_(\d+)\.jpg", name):  # the cover for Upload-Post
+        n = int(m.group(1))
+        if not 1 <= n <= len(job.previews):
+            raise HTTPException(404)
+        return FileResponse(job.previews[n - 1], media_type="image/jpeg")
+    return FileResponse(job.output, filename=job.output.name, media_type="video/mp4")
 
 
 @app.get("/jobs/{job_id}/preview/{n}", dependencies=[Depends(check)])
@@ -705,6 +726,126 @@ async def youtube_upload(
     save_job(job_id, info)
     threading.Thread(target=_upload_worker, args=(job_id, channel, meta, cover, playlist), daemon=True).start()
     return {"ok": True}
+
+
+# ---------- Upload-Post ----------
+
+UP_ACTIVE = ("отправляется", "отправлено", "в работе")
+UPLOADING = DATA / "uploading"  # auto-update waits while Upload-Post is downloading the video
+
+
+@app.get("/uploadpost", dependencies=[Depends(check)])
+def uploadpost_state():
+    return {"enabled": bool(uploadpost.api_key()), "user": os.environ.get("UPLOAD_POST_USER", "")}
+
+
+@app.post("/uploadpost/key", dependencies=[Depends(check)])
+def uploadpost_key(key: str = Form(...)):
+    if not re.fullmatch(r"[\w.\-]{20,400}", key.strip()):
+        raise HTTPException(400, "Это не похоже на API-ключ Upload-Post")
+    uploadpost.save_key(key)
+    return {"ok": True}
+
+
+@app.post("/jobs/{job_id}/uploadpost", dependencies=[Depends(check)])
+def uploadpost_send(
+    job_id: str,
+    request: Request,
+    user: str = Form(...),
+    title: str = Form(...),
+    description: str = Form(""),
+    tags: str = Form(""),
+    privacy: str = Form("private"),
+    publish_at: str = Form(""),
+    thumb: int = Form(0),
+    synthetic: bool = Form(False),
+):
+    """Upload-Post downloads the video by a link that opens without the
+    password; the link closes when it reports the result."""
+    info = jobs.get(job_id)
+    if not info or info["status"] != "готово" or not info["job"].output.exists():
+        raise HTTPException(404, "Нет готового видео")
+    if not uploadpost.api_key():
+        raise HTTPException(400, "Нет API-ключа Upload-Post")
+    if (info.get("up") or {}).get("status") in UP_ACTIVE:
+        raise HTTPException(400, "Это видео уже отправлено")
+    user, title = user.strip(), title.strip()
+    if not user:
+        raise HTTPException(400, "Впишите профиль Upload-Post")
+    if not title or len(title) > 100 or "<" in title or ">" in title:
+        raise HTTPException(400, "Название: от 1 до 100 символов, без < и >")
+    if len(description) > 5000:
+        raise HTTPException(400, "Описание длиннее 5000 символов")
+    if privacy not in ("public", "unlisted", "private"):
+        raise HTTPException(400, "Неизвестный доступ")
+    until = time.time() + 24 * 3600
+    if publish_at:
+        _publish_at(publish_at)  # at least 30 minutes ahead
+        # Upload-Post fetches the video at that time: keep the link open past it
+        until = datetime.fromisoformat(publish_at).replace(tzinfo=MSK).timestamp() + 24 * 3600
+    token = _new_share(job_id, until)
+    base = f"https://{request.url.netloc}/share/{token}"
+    fields = [("user", user), ("platform[]", "youtube"), ("video", f"{base}/{info['job'].output.name}"),
+              ("title", title), ("description", description.replace("<", "‹").replace(">", "›")),
+              ("privacyStatus", privacy), ("async_upload", "true"), ("categoryId", "22"),
+              ("selfDeclaredMadeForKids", "false"), ("containsSyntheticMedia", "true" if synthetic else "false")]
+    fields += [("tags[]", t.strip()) for t in tags.split(",") if t.strip()]
+    if publish_at:
+        fields += [("scheduled_date", datetime.fromisoformat(publish_at).strftime("%Y-%m-%dT%H:%M:%S")),
+                   ("timezone", "Europe/Moscow")]
+    if 1 <= thumb <= len(info["job"].previews):
+        fields.append(("thumbnail_url", f"{base}/preview_{thumb}.jpg"))
+    info["up"] = {"status": "отправляется", "user": user, "publish_at": publish_at, "token": token, "error": ""}
+    save_job(job_id, info)
+    try:
+        r = uploadpost.send(fields)
+    except Exception as e:
+        _close_share(token)
+        info["up"].update(status="ошибка", error=str(e)[:500])
+        save_job(job_id, info)
+        raise HTTPException(502, str(e)[:500])
+    info["up"].update(status="отправлено", request_id=r.get("request_id") or "", job_id=r.get("job_id") or "")
+    save_job(job_id, info)
+    UPLOADING.touch()
+    return {"ok": True}
+
+
+def _uploadpost_watch() -> None:
+    """Ask Upload-Post every minute how each sent video is doing."""
+    while True:
+        time.sleep(60)
+        active = False
+        for job_id, info in list(jobs.items()):
+            up = info.get("up")
+            if not up or up.get("status") not in ("отправлено", "в работе"):
+                continue
+            active = True
+            try:
+                r = uploadpost.status(up.get("request_id", ""), up.get("job_id", ""))
+            except Exception as e:
+                up["note"] = str(e)[:200]  # the network or the service: try again next minute
+                continue
+            state = r.get("status", "")
+            results = [x for x in r.get("results") or [] if x.get("platform") == "youtube"]
+            if state == "completed":
+                ok = results and all(x.get("success") for x in results)
+                up["status"] = "загружено" if ok else "ошибка"
+                up["error"] = "" if ok else "; ".join(str(x.get("message", "")) for x in results)[:500] or "без ответа"
+                _close_share(up.get("token", ""))
+            elif state in ("failed", "not_found"):
+                up["status"] = "ошибка"
+                up["error"] = ("; ".join(str(x.get("message", "")) for x in results) or state)[:500]
+                _close_share(up.get("token", ""))
+            else:
+                up["status"], up["note"] = "в работе", state
+            save_job(job_id, info)
+        if active:
+            UPLOADING.touch()
+        else:
+            UPLOADING.unlink(missing_ok=True)
+
+
+threading.Thread(target=_uploadpost_watch, daemon=True).start()
 
 
 @app.delete("/youtube/channels/{channel_id}", dependencies=[Depends(check)])

@@ -26,7 +26,7 @@
   @media (max-width:520px) { main { padding:16px 12px 40px; } .card { padding:14px; } .wide { grid-column:1 / -1; } }
   dialog { width:min(620px, calc(100vw - 32px)); border:1px solid var(--line); border-radius:14px; background:var(--card); color:var(--text); padding:18px; }
   dialog::backdrop { background:rgba(0,0,0,.4); }
-  dialog input[type=text], dialog input[type=datetime-local] { width:100%; padding:10px; border:1px solid var(--line); border-radius:10px; background:var(--bg); color:var(--text); font:inherit; }
+  dialog input[type=text], dialog input[type=datetime-local], dialog select { width:100%; padding:10px; border:1px solid var(--line); border-radius:10px; background:var(--bg); color:var(--text); font:inherit; }
   dialog .thumbs img { cursor:pointer; border:3px solid transparent; } dialog .thumbs img.on { border-color:var(--accent); }
   textarea { width:100%; margin-top:6px; padding:8px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--text); font:13px/1.4 ui-monospace, monospace; }
 </style>
@@ -95,6 +95,13 @@
 
   <div class="card"><h2 style="margin:0 0 6px;font-size:18px">Очередь</h2><div class="muted" style="margin-bottom:6px"><span id="disk"></span> · <a href="#" onclick="cleanup();return false">Удалить старые</a><br><span id="build_folder"></span> · <a href="#" onclick="pickFolder();return false">выбрать папку</a></div><div id="jobs" class="muted">Пока пусто</div></div>
 
+  <div class="card"><h2 style="margin:0 0 6px;font-size:18px">Upload-Post</h2>
+    <div class="muted" id="up_state"></div>
+    <label>API-ключ <span class="hint">upload-post.com → API Keys; хранится только на сервере</span></label>
+    <input type="password" id="up_key" autocomplete="off" style="width:100%;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--text);font:inherit">
+    <button type="button" onclick="upKey()">Сохранить ключ</button>
+  </div>
+
   <div class="card"><h2 style="margin:0 0 6px;font-size:18px">YouTube</h2>
     <div class="muted">Адрес перенаправления для Google Cloud: <b id="yt_redirect"></b><br>
       Страницы для Google: <a href="about" target="_blank">о приложении</a> · <a href="privacy" target="_blank">конфиденциальность</a> · <a href="terms" target="_blank">условия</a></div>
@@ -123,6 +130,24 @@
     <button type="button" onclick="ytSend()">Загрузить</button>
     <button type="button" onclick="document.getElementById('yt_dlg').close()" style="background:var(--line);color:var(--text);margin-top:8px">Отмена</button>
     <p class="muted" id="yt_send_msg"></p>
+  </form>
+</dialog>
+<dialog id="up_dlg">
+  <form id="up_form" method="dialog">
+    <h2 style="margin:0 0 4px;font-size:18px">Отправить через Upload-Post</h2>
+    <div class="muted" id="up_video"></div>
+    <label>Профиль Upload-Post <span class="hint">имя профиля, к которому подключён канал</span></label><input type="text" name="user" required>
+    <label>Название <span class="hint">до 100 символов</span></label><input type="text" name="title" maxlength="100" required>
+    <label>Описание</label><textarea name="description" rows="6" style="font:15px/1.4 inherit"></textarea>
+    <label>Теги <span class="hint">через запятую</span></label><input type="text" name="tags">
+    <label>Доступ</label><select name="privacy"><option value="private">Приватное</option><option value="unlisted">По ссылке</option><option value="public">Открытое</option></select>
+    <label>Когда отправить <span class="hint">по Москве; пусто = сразу. Upload-Post начнёт загрузку в это время, 10 часов загружаются около 40 минут, потом YouTube ещё обрабатывает</span></label><input type="datetime-local" name="publish_at">
+    <label>Обложка <span class="hint">кадр из видео</span></label>
+    <div class="thumbs" id="up_thumbs"></div><input type="hidden" name="thumb" value="0">
+    <label style="font-weight:400"><input type="checkbox" name="synthetic" value="true" checked> Видео создано с помощью ИИ (раскрытие для YouTube)</label>
+    <button type="button" onclick="upSend()">Отправить</button>
+    <button type="button" onclick="document.getElementById('up_dlg').close()" style="background:var(--line);color:var(--text);margin-top:8px">Отмена</button>
+    <p class="muted" id="up_send_msg"></p>
   </form>
 </dialog>
 <script>
@@ -232,6 +257,7 @@ async function load() {
     ${j.timecodes ? `<details><summary>Таймкоды для описания</summary><textarea readonly rows="8">${esc(j.timecodes)}</textarea><a href="#" onclick="navigator.clipboard.writeText(this.previousElementSibling.value);this.textContent='Скопировано';return false">Скопировать</a></details>` : ''}
     ${j.file ? `<div><a href="#" onclick="shareLink('${j.id}');return false">Ссылка без пароля на 24 ч</a> <span class="muted">для Upload-Post</span> · <a href="#" onclick="unshare('${j.id}');return false">закрыть ссылки</a></div>` : ''}
     ${j.file ? ytLine(j) : ''}
+    ${j.file ? upLine(j) : ''}
     ${j.status !== 'работает' ? `<a href="#" onclick="del('${j.id}');return false">Удалить</a>` : ''}
   </div>`).join('');
 }
@@ -420,6 +446,53 @@ async function buildHere(id) {
     say('Ошибка: ' + err.message);
   }
 }
+
+// ---------- Upload-Post ----------
+let upEnabled = false, upUser = '', upJob = null;
+async function upLoad() {
+  const r = await fetch('uploadpost'); if (!r.ok) return;
+  const d = await r.json(); upEnabled = d.enabled; upUser = d.user;
+  document.getElementById('up_state').textContent = d.enabled ? 'Ключ сохранён на сервере' : 'Ключ ещё не сохранён';
+  lastJobs = ''; load();
+}
+async function upKey() {
+  const el = document.getElementById('up_key'), form = new FormData(); form.append('key', el.value.trim());
+  const r = await fetch('uploadpost/key', {method:'POST', body:form}); el.value = '';
+  document.getElementById('up_state').textContent = r.ok ? 'Ключ сохранён на сервере' : 'Ошибка: ' + ((await r.json()).detail || r.status);
+  if (r.ok) upLoad();
+}
+function upLine(j) {
+  const u = j.up, when = u && u.publish_at ? ', отправка ' + esc(u.publish_at.replace('T', ' ')) + ' МСК' : '';
+  if (u && ['отправляется', 'отправлено', 'в работе'].includes(u.status)) return `<div>Upload-Post: ${esc(u.status)}${u.note ? ' (' + esc(u.note) + ')' : ''}${when}</div>`;
+  if (u && u.status === 'загружено') return `<div class="st-готово">Upload-Post: загружено на YouTube (профиль «${esc(u.user)}»)${when}</div>`;
+  const err = u && u.status === 'ошибка' ? `<div class="st-ошибка">Upload-Post: ${esc(u.error)}</div>` : '';
+  return err + (upEnabled ? `<div><a href="#" onclick="upOpen('${j.id}');return false">Отправить через Upload-Post</a></div>` : '');
+}
+function upOpen(id) {
+  const j = lastList.find(x => x.id === id); if (!j) return;
+  upJob = j; const f = document.getElementById('up_form');
+  f.reset(); f.thumb.value = 0; f.user.value = localStorage.getItem('upUser') || upUser;
+  document.getElementById('up_video').textContent = j.file + (j.size_gb ? ` · ${j.size_gb} ГБ` : '');
+  document.getElementById('up_thumbs').innerHTML = [...Array(j.previews)].map((_, i) => `<img src="jobs/${j.id}/preview/${i + 1}" onclick="upThumb(this, ${i + 1})" loading="lazy">`).join('');
+  if (j.timecodes) f.description.value = j.timecodes;
+  document.getElementById('up_send_msg').textContent = '';
+  document.getElementById('up_dlg').showModal();
+}
+function upThumb(img, n) {
+  document.querySelectorAll('#up_thumbs img').forEach(x => x.classList.remove('on'));
+  img.classList.add('on'); document.getElementById('up_form').thumb.value = n;
+}
+async function upSend() {
+  const f = document.getElementById('up_form'), m = document.getElementById('up_send_msg');
+  if (!f.title.value.trim() || !f.user.value.trim()) { m.textContent = 'Впишите профиль и название'; return; }
+  const form = new FormData(f); if (!f.synthetic.checked) form.delete('synthetic');
+  try { localStorage.setItem('upUser', f.user.value.trim()); } catch (err) {}
+  m.textContent = 'Отправляю…';
+  const r = await fetch(`jobs/${upJob.id}/uploadpost`, {method:'POST', body:form});
+  if (!r.ok) { m.textContent = 'Ошибка: ' + ((await r.json()).detail || r.status); return; }
+  document.getElementById('up_dlg').close(); lastJobs = ''; load();
+}
+upLoad();
 </script>
 </body>
 </html>
