@@ -778,21 +778,19 @@ def uploadpost_send(
         raise HTTPException(400, "Описание длиннее 5000 символов")
     if privacy not in ("public", "unlisted", "private"):
         raise HTTPException(400, "Неизвестный доступ")
-    until = time.time() + 24 * 3600
-    if publish_at:
-        _publish_at(publish_at)  # at least 30 minutes ahead
-        # Upload-Post fetches the video at that time: keep the link open past it
-        until = datetime.fromisoformat(publish_at).replace(tzinfo=MSK).timestamp() + 24 * 3600
-    token = _new_share(job_id, until)
+    youtube_at = _publish_at(publish_at) if publish_at else ""  # at least 30 minutes ahead
+    token = _new_share(job_id, time.time() + 24 * 3600)
     base = f"https://{request.url.netloc}/share/{token}"
     fields = [("user", user), ("platform[]", "youtube"), ("video", f"{base}/{info['job'].output.name}"),
               ("title", title), ("description", description.replace("<", "‹").replace(">", "›")),
               ("privacyStatus", privacy), ("async_upload", "true"), ("categoryId", "22"),
               ("selfDeclaredMadeForKids", "false"), ("containsSyntheticMedia", "true" if synthetic else "false")]
     fields += [("tags[]", t.strip()) for t in tags.split(",") if t.strip()]
-    if publish_at:
-        fields += [("scheduled_date", datetime.fromisoformat(publish_at).strftime("%Y-%m-%dT%H:%M:%S")),
-                   ("timezone", "Europe/Moscow")]
+    if youtube_at:
+        # uploaded now as private, YouTube itself publishes it then (not
+        # scheduled_date: that would start the 40-minute upload only at that time)
+        fields = [(k, "private" if k == "privacyStatus" else v) for k, v in fields]
+        fields.append(("youtube_publish_at", youtube_at))
     if 1 <= thumb <= len(info["job"].previews):
         fields.append(("thumbnail_url", f"{base}/preview_{thumb}.jpg"))
     info["up"] = {"status": "отправляется", "user": user, "publish_at": publish_at, "token": token, "error": ""}
