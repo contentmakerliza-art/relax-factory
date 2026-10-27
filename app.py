@@ -26,7 +26,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from render.drive import fetch_folder
 from render.breathing import parse_script
-from render.engine import Breath, Job, RenderSettings, kit_path, make_check_clips, probe_duration, render
+from render.engine import Breath, Job, RenderSettings, kit_dir, make_check_clips, probe_duration, render
 from render.scripts import DEFAULT, PRESETS
 from render import youtube
 
@@ -203,7 +203,7 @@ RESERVE_GB = float(os.environ.get("RELAX_RESERVE_GB", "5"))
 
 def need_gb(s: RenderSettings, black: bool = False) -> float:
     """Disk a render may take: the video at its bitrate (a black screen takes
-    almost nothing), the sound (twice: once more in the kit for the Mac), and
+    almost nothing), the sound (twice: once more in the kit for assembling on the computer), and
     room for the working files."""
     mbit = 0.5 if black else float(s.video_bitrate.rstrip("M") or 8)
     return (mbit + 0.7) * s.duration / 8000 * 1.1 + 2
@@ -387,8 +387,7 @@ def list_jobs():
             "tracks": info.get("tracks", len(job.tracks)),
             "file": job.output.name if info["status"] == "готово" else None,
             "size_gb": round(job.output.stat().st_size / 1e9, 2) if job.output.exists() and info["status"] == "готово" else None,
-            "kit_gb": round(kit_path(job.output).stat().st_size / 1e9, 2)
-            if info["status"] == "готово" and kit_path(job.output).exists() else None,
+            "kit_gb": _kit_gb(job) if info["status"] == "готово" else None,
             "previews": len(job.previews) if info["status"] == "готово" else 0,
             "timecodes": job.timecodes if info["status"] == "готово" else "",
             "warning": job.warning,
@@ -410,14 +409,25 @@ def download(job_id: str, watch: bool = False):
                         content_disposition_type="inline" if watch else "attachment")
 
 
-@app.get("/jobs/{job_id}/kit", dependencies=[Depends(check)])
-def download_kit(job_id: str):
-    """The loop, the sound and a script that builds the long video on a Mac."""
+def _kit_gb(job: Job) -> float | None:
+    """Download size of the assembly kit, or None when the video has none."""
+    kit = kit_dir(job.output)
+    if not (kit / "map.json").exists():
+        return None
+    return round(sum(f.stat().st_size for f in kit.iterdir()) / 1e9, 2)
+
+
+@app.get("/jobs/{job_id}/kit/{name}", dependencies=[Depends(check)])
+def kit_file(job_id: str, name: str):
+    """Loop, sound and byte map: the page builds the long video from them
+    on the computer (Range requests let it download in resumable pieces)."""
     info = jobs.get(job_id)
-    if not info or info["status"] != "готово" or not kit_path(info["job"].output).exists():
-        raise HTTPException(404, "Нет комплекта для Mac (видео сделано до этой функции)")
-    kit = kit_path(info["job"].output)
-    return FileResponse(kit, filename=kit.name, media_type="application/zip")
+    if not info or info["status"] != "готово":
+        raise HTTPException(404)
+    f = kit_dir(info["job"].output) / Path(name).name
+    if not f.is_file():
+        raise HTTPException(404, "Нет файлов для сборки (видео сделано до этой функции)")
+    return FileResponse(f, media_type="application/json" if f.suffix == ".json" else "application/octet-stream")
 
 
 @app.get("/jobs/{job_id}/preview/{n}", dependencies=[Depends(check)])

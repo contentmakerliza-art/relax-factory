@@ -214,7 +214,7 @@ async function load() {
     ${j.warning ? `<div class="muted">⚠ ${esc(j.warning)}</div>` : ''}
     ${j.status === 'работает' ? `<div class="bar"><i style="width:${Math.round(j.progress * 100)}%"></i></div>` : ''}
     ${j.file ? `<a href="jobs/${j.id}/video?watch=1" target="_blank">Смотреть</a> · <a href="jobs/${j.id}/video">Скачать</a> <span class="muted">${j.size_gb} ГБ</span> · ` : ''}
-    ${j.kit_gb ? `<div><a href="jobs/${j.id}/kit">Комплект для Mac</a> <span class="muted">${j.kit_gb} ГБ · распакуйте и дважды щёлкните «собрать-видео.command»</span></div>` : ''}
+    ${j.kit_gb ? `<div><a href="#" onclick="buildHere('${j.id}');return false">Собрать на этом компьютере</a> <span class="muted">скачать ${j.kit_gb} ГБ вместо ${j.size_gb} ГБ · Chrome</span> <span class="muted" id="build_${j.id}"></span></div>` : ''}
     ${j.file ? `<div>Проверить: <a href="jobs/${j.id}/check/start" target="_blank">первые 3 минуты</a> · <a href="jobs/${j.id}/check/end" target="_blank">последняя минута</a> <span class="muted">${esc(j.checks || '')}</span></div>` : ''}
     ${j.file ? `<div class="muted">В браузере для загрузки: /videos/${esc(j.id)}/${esc(j.file)}</div>` : ''}
     ${j.previews ? `<details><summary>Кадры для обложки</summary><div class="thumbs">${[...Array(j.previews)].map((_, i) => `<a href="jobs/${j.id}/preview/${i + 1}?download=1" title="Скачать превью"><img src="jobs/${j.id}/preview/${i + 1}" alt="Превью ${i + 1}" loading="lazy"></a>`).join('')}</div></details>` : ''}
@@ -284,6 +284,90 @@ async function ytSend() {
   document.getElementById('yt_dlg').close(); load();
 }
 ytLoad();
+
+// ---------- building the long video on this computer ----------
+// The server keeps the loop, the sound and a byte map of the finished video:
+// the same file is put together here, so only a small part is downloaded.
+const PIECE = 32 * 1024 * 1024;
+async function fetchAll(url, onBytes) {
+  // pieces of 32 MB with retries: a dropped connection repeats one piece, not the whole file
+  const parts = [];
+  let pos = 0, total = null;
+  while (total === null || pos < total) {
+    let r;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        r = await fetch(url, { headers: { Range: `bytes=${pos}-${pos + PIECE - 1}` } });
+        if (!r.ok) throw new Error(r.status + ' ' + (await r.text()));
+        const buf = new Uint8Array(await r.arrayBuffer());
+        if (r.status === 200) { onBytes(buf.length); return new Blob([buf]); }  // no ranges: the whole file came
+        total = total ?? parseInt(r.headers.get('Content-Range').split('/')[1]);
+        parts.push(buf); pos += buf.length; onBytes(buf.length);
+        break;
+      } catch (err) {
+        if (attempt >= 6) throw err;
+        await new Promise(res => setTimeout(res, 3000 * attempt));
+      }
+    }
+  }
+  return new Blob(parts);
+}
+async function buildHere(id) {
+  const j = lastList.find(x => x.id === id), say = t => { const el = document.getElementById('build_' + id); if (el) el.textContent = t; };
+  if (!window.showSaveFilePicker) { alert('Сборка работает в Chrome на компьютере. Откройте приложение в Chrome.'); return; }
+  let handle;
+  try {
+    handle = await window.showSaveFilePicker({ suggestedName: j.file, types: [{ description: 'Видео MP4', accept: { 'video/mp4': ['.mp4'] } }] });
+  } catch (err) { return; }  // the window was closed
+  try {
+    const base = `jobs/${id}/kit/`;
+    const map = await (await fetch(base + 'map.json')).json();
+    const names = [map.head, map.sound, ...map.sources, 'map.bin'];
+    const need = names.reduce((a, n) => a + map.bytes[n], 0);
+    let got = 0;
+    const blobs = {};
+    for (const n of names) {
+      blobs[n] = await fetchAll(base + n, b => { got += b; say(`Скачиваю: ${Math.floor(got / need * 100)}% из ${(need / 1e9).toFixed(2)} ГБ`); });
+    }
+    const raw = await blobs['map.bin'].arrayBuffer(), count = new DataView(raw).getUint32(0, true);
+    const kinds = new Uint8Array(raw, 4, count), start = 4 + count + ((8 - (4 + count) % 8) % 8);
+    const offs = new Float64Array(raw.slice(start, start + 8 * count)), lens = new Uint32Array(raw.slice(start + 8 * count, start + 12 * count));
+    // the header bytes and the loop fit in memory; the sound is read in windows (its pieces go in order)
+    const mem = [new Uint8Array(await blobs[map.head].arrayBuffer()), null,
+                 ...await Promise.all(map.sources.map(async n => new Uint8Array(await blobs[n].arrayBuffer())))];
+    const sound = blobs[map.sound];
+    let win = new Uint8Array(0), winAt = 0;
+    const out = await handle.createWritable();
+    let buf = new Uint8Array(PIECE), fill = 0, written = 0;
+    const flush = async () => { await out.write(buf.subarray(0, fill)); written += fill; fill = 0;
+                                say(`Собираю: ${Math.floor(written / map.size * 100)}%`); };
+    for (let i = 0; i < count; i++) {
+      let off = offs[i], left = lens[i];
+      while (left > 0) {
+        let src, at;
+        if (kinds[i] === 1) {
+          if (off < winAt || off >= winAt + win.length) {
+            winAt = off; win = new Uint8Array(await sound.slice(off, off + 4 * PIECE).arrayBuffer());
+            if (!win.length) throw new Error('звуковой файл короче, чем нужно');
+          }
+          src = win; at = off - winAt;
+        } else { src = mem[kinds[i]]; at = off; }
+        const n = Math.min(left, src.length - at, buf.length - fill);
+        if (n <= 0) throw new Error('карта сборки не совпала с файлами');
+        buf.set(src.subarray(at, at + n), fill);
+        fill += n; off += n; left -= n;
+        if (fill === buf.length) await flush();
+      }
+    }
+    if (fill) await flush();
+    if (written !== map.size) throw new Error(`размер ${written} вместо ${map.size}`);
+    say('Сохраняю файл…');
+    await out.close();
+    say(`Готово: ${j.file}, ${(written / 1e9).toFixed(2)} ГБ`);
+  } catch (err) {
+    say('Ошибка: ' + err.message);
+  }
+}
 </script>
 </body>
 </html>
