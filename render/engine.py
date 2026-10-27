@@ -15,13 +15,13 @@ import shutil
 import re
 import subprocess
 import tempfile
-import zipfile
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable
 
 from render import breathing
 from render.breathing import Breath
+from render.mp4map import build_map
 from render.zoomfix import zoom_filter
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
@@ -716,54 +716,26 @@ def encode_seamless_aac(cycle: Path, dst: Path, duration: float, bitrate: str, t
     _run(["ffmpeg", "-y", "-i", str(raw), "-c", "copy", "-t", str(duration), str(dst)])
 
 
-# ---------- kit for assembling on a Mac ----------
+# ---------- kit for assembling on the viewer's computer ----------
 
-def kit_path(output: Path) -> Path:
-    return output.with_name(f"{output.stem}_mac.zip")
-
-
-MAC_SCRIPT = """#!/bin/bash
-# Собирает {name}.mp4 из петли и звука: просто повторяет петлю, без перекодирования.
-cd "$(dirname "$0")" || exit 1
-FF=$(command -v ffmpeg || ls "$HOME/bin/ffmpeg" /opt/homebrew/bin/ffmpeg /usr/local/bin/ffmpeg 2>/dev/null | head -1)
-if [ -z "$FF" ]; then
-  echo "Не нашла ffmpeg. Поставьте его командой: brew install ffmpeg"
-  read -r -p "Нажмите Enter, чтобы закрыть"; exit 1
-fi
-FREE=$(df -k . | awk 'NR==2 {{print int($4 / 1048576)}}')
-if [ "$FREE" -lt {need_gb} ]; then
-  echo "Мало места: свободно $FREE ГБ, нужно около {need_gb} ГБ"
-  read -r -p "Нажмите Enter, чтобы закрыть"; exit 1
-fi
-: > repeat.txt
-{parts}for i in $(seq 1 {count}); do echo "file '{repeat}'" >> repeat.txt; done
-echo "Собираю {name}.mp4, это несколько минут…"
-"$FF" -hide_banner -loglevel error -stats -y -f concat -safe 0 -i repeat.txt -i audio.m4a \\
-  -map 0:v -map 1:a -c copy -t {duration} "{name}.mp4" || {{ read -r -p "Ошибка. Enter, чтобы закрыть"; exit 1; }}
-rm -f repeat.txt
-echo "Готово: $(pwd)/{name}.mp4"
-read -r -p "Нажмите Enter, чтобы закрыть"
-"""
+def kit_dir(output: Path) -> Path:
+    return output.parent / "kit"
 
 
-def write_kit(output: Path, parts: list[Path], repeat: Path, count: int, audio: Path,
-              duration: float) -> Path:
-    """The loop, the sound and a script that repeats the loop to full length
-    on a Mac, exactly as the server does: a few hundred MB to download instead
-    of the whole long video. Stored without compression (video does not shrink)."""
-    name = re.sub(r"[^\w.-]+", "_", output.stem)  # goes into a shell script
-    final_gb = math.ceil(output.stat().st_size / 1e9) + 1 if output.exists() else 40
-    dst = kit_path(output)
-    script = MAC_SCRIPT.format(
-        name=name, count=count, repeat=repeat.name, duration=duration, need_gb=final_gb,
-        parts="".join(f"echo \"file '{p.name}'\" >> repeat.txt\n" for p in parts))
-    with zipfile.ZipFile(dst, "w", zipfile.ZIP_STORED) as z:
-        for f in [*parts, repeat, audio]:
-            z.write(f, f"{name}/{f.name}")
-        info = zipfile.ZipInfo(f"{name}/собрать-видео.command")
-        info.external_attr = 0o100755 << 16  # executable after unzipping
-        z.writestr(info, script)
-    return dst
+def write_kit(output: Path, parts: list[Path], repeat: Path, audio: Path) -> None:
+    """Keep the loop and the sound next to the video, with a byte map of the
+    video: the page rebuilds the exact same file from them on the computer,
+    a few hundred MB to download instead of the whole long video."""
+    kit = kit_dir(output)
+    shutil.rmtree(kit, ignore_errors=True)
+    kit.mkdir()
+    kept = [shutil.move(str(f), kit / f.name) for f in [*parts, repeat, audio]]
+    *kept_parts, kept_repeat, kept_audio = map(Path, kept)
+    try:
+        build_map(output, kept_parts, kept_repeat, kept_audio, kit / "head.bin", kit / "map.json")
+    except Exception:
+        shutil.rmtree(kit, ignore_errors=True)  # the video itself is still fine
+        raise
 
 
 # ---------- assembly ----------
@@ -834,12 +806,19 @@ def _render_breathing(job: Job, s: RenderSettings, say: Progress, tmp: Path) -> 
     lst.write_text(f"file '{intro}'\n" + f"file '{black}'\n" * (math.ceil(s.duration / 10) + 1))
     _run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(lst), "-i", str(audio),
           "-map", "0:v", "-map", "1:a", "-c", "copy", "-t", str(s.duration), str(job.output)])
-    say("Собираю комплект для Mac", 0.9)
-    write_kit(job.output, [intro], black, math.ceil(s.duration / 10) + 1, audio, s.duration)
+    say("Готовлю сборку на компьютере", 0.9)
+    _kit(job, [intro], black, audio)
     say("Делаю кусочки для проверки", 0.95)
     make_check_clips(job)
     say("Готово", 1.0)
     return job.output
+
+
+def _kit(job: Job, parts: list[Path], repeat: Path, audio: Path) -> None:
+    try:
+        write_kit(job.output, parts, repeat, audio)
+    except Exception as exc:  # only the download-free assembly is lost, not the video
+        job.warning = (job.warning + " " if job.warning else "") + f"Сборка на компьютере недоступна: {exc}"
 
 
 def render(job: Job, progress: Progress | None = None) -> Path:
@@ -877,8 +856,8 @@ def render(job: Job, progress: Progress | None = None) -> Path:
         _run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(lst), "-i", str(audio),
               "-map", "0:v", "-map", "1:a", "-c", "copy", "-t", str(s.duration),
               str(job.output)])
-        say("Собираю комплект для Mac", 0.9)
-        write_kit(job.output, [], seg, repeats, audio, s.duration)
+        say("Готовлю сборку на компьютере", 0.9)
+        _kit(job, [], seg, audio)
         say("Делаю кусочки для проверки", 0.95)
         make_check_clips(job)
     say("Готово", 1.0)
