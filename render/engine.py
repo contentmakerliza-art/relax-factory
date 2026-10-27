@@ -725,7 +725,7 @@ def kit_path(output: Path) -> Path:
 MAC_SCRIPT = """#!/bin/bash
 # Собирает {name}.mp4 из петли и звука: просто повторяет петлю, без перекодирования.
 cd "$(dirname "$0")" || exit 1
-FF=$(command -v ffmpeg || ls /opt/homebrew/bin/ffmpeg /usr/local/bin/ffmpeg 2>/dev/null | head -1)
+FF=$(command -v ffmpeg || ls "$HOME/bin/ffmpeg" /opt/homebrew/bin/ffmpeg /usr/local/bin/ffmpeg 2>/dev/null | head -1)
 if [ -z "$FF" ]; then
   echo "Не нашла ffmpeg. Поставьте его командой: brew install ffmpeg"
   read -r -p "Нажмите Enter, чтобы закрыть"; exit 1
