@@ -33,6 +33,7 @@
 </head>
 <body>
 <main>
+  <div id="q_alert" class="card st-ошибка" style="display:none"></div>
   <h1>Релакс-фабрика</h1>
   <p class="sub">Картинка или клип + альбом треков → готовое длинное видео.</p>
 
@@ -95,6 +96,12 @@
 
   <div class="card"><h2 style="margin:0 0 6px;font-size:18px">Очередь</h2><div class="muted" style="margin-bottom:6px"><span id="disk"></span> · <a href="#" onclick="cleanup();return false">Удалить старые</a><br><span id="build_folder"></span> · <a href="#" onclick="pickFolder();return false">выбрать папку</a></div><div id="jobs" class="muted">Пока пусто</div></div>
 
+  <div class="card"><h2 style="margin:0 0 6px;font-size:18px">Очередь роликов на YouTube</h2>
+    <div class="muted">Одобренный тестовый рендер + тексты, обложка и время. Сервер сам делает длинное видео примерно за сутки до выхода, проверяет длину, отправляет через Upload-Post и удаляет длинный файл, когда YouTube его принял.</div>
+    <div id="q_list" class="muted" style="margin-top:8px">Пока пусто</div>
+    <button type="button" onclick="qOpen(null)">Добавить ролик</button>
+  </div>
+
   <div class="card"><h2 style="margin:0 0 6px;font-size:18px">Upload-Post</h2>
     <div class="muted" id="up_state"></div>
     <label>API-ключ <span class="hint">upload-post.com → API Keys; хранится только на сервере</span></label>
@@ -130,6 +137,26 @@
     <button type="button" onclick="ytSend()">Загрузить</button>
     <button type="button" onclick="document.getElementById('yt_dlg').close()" style="background:var(--line);color:var(--text);margin-top:8px">Отмена</button>
     <p class="muted" id="yt_send_msg"></p>
+  </form>
+</dialog>
+<dialog id="q_dlg">
+  <form id="q_form" method="dialog">
+    <h2 style="margin:0 0 4px;font-size:18px" id="q_head">Ролик в очередь</h2>
+    <label>Тестовый рендер <span class="hint">номер одобренного рендера, например 20261022-163506-d232</span></label><input type="text" name="source" required>
+    <label>Профиль Upload-Post</label><input type="text" name="user" required>
+    <label>Опубликовать <span class="hint">по Москве</span></label><input type="datetime-local" name="publish_at" required>
+    <label>Название <span class="hint">до 100 символов</span></label><input type="text" name="title" maxlength="100" required>
+    <label>Описание</label><textarea name="description" rows="6" style="font:15px/1.4 inherit"></textarea>
+    <label>Теги <span class="hint">через запятую</span></label><input type="text" name="tags">
+    <label>Обложка <span class="hint">ссылка на файл в Google Диске (доступ по ссылке) или файл</span></label>
+    <input type="text" name="cover_url" placeholder="https://drive.google.com/file/d/…">
+    <input type="file" name="cover_file" accept="image/*" style="margin-top:6px">
+    <div id="q_cover_now" class="muted"></div>
+    <label style="font-weight:400"><input type="checkbox" name="synthetic" checked> Видео создано с помощью ИИ (раскрытие для YouTube)</label>
+    <p class="muted">10 часов, 4 Мбит/с, те же клипы, звук и настройки, что в тестовом рендере. Приватное, YouTube сам откроет его в указанное время. Не для детей · «Люди и блоги» · английский.</p>
+    <button type="button" onclick="qSave()">Сохранить</button>
+    <button type="button" onclick="document.getElementById('q_dlg').close()" style="background:var(--line);color:var(--text);margin-top:8px">Отмена</button>
+    <p class="muted" id="q_msg"></p>
   </form>
 </dialog>
 <dialog id="up_dlg">
@@ -493,6 +520,59 @@ async function upSend() {
   document.getElementById('up_dlg').close(); lastJobs = ''; load();
 }
 upLoad();
+
+// ---------- Очередь роликов ----------
+let qItems = [], qText = '', qEdit = null;
+async function qLoad() {
+  const r = await fetch('queue'); if (!r.ok) return;
+  const text = await r.text(); if (text === qText) return;
+  qText = text; qItems = JSON.parse(text);
+  const bad = qItems.filter(x => x.status === 'ошибка');
+  const alert = document.getElementById('q_alert');
+  alert.style.display = bad.length ? '' : 'none';
+  alert.innerHTML = bad.map(x => `Очередь роликов: «${esc(x.title)}» (${esc(x.publish_at.replace('T', ' '))}): ${esc(x.error)}`).join('<br>');
+  document.getElementById('q_list').innerHTML = qItems.length ? qItems.map(x => {
+    const st = x.status === 'на YouTube' ? 'st-готово' : x.status === 'ошибка' ? 'st-ошибка' : '';
+    const bar = x.status === 'рендер' ? `<div class="bar"><i style="width:${Math.round((x.progress || 0) * 100)}%"></i></div><div class="muted">${esc(x.step || 'ждёт своей очереди')}</div>` : '';
+    const acts = [x.status !== 'отправлен' && x.status !== 'на YouTube' ? `<a href="#" onclick="qOpen('${x.id}');return false">изменить</a>` : '',
+      x.status === 'ошибка' ? `<a href="#" onclick="qAct('${x.id}','retry');return false">повторить</a>` : '',
+      x.status !== 'отправлен' ? `<a href="#" onclick="qAct('${x.id}','delete');return false">удалить</a>` : ''].filter(Boolean).join(' · ');
+    return `<div class="job" style="display:flex;gap:10px">${x.cover ? `<img src="queue/${x.id}/cover" style="width:96px;height:54px;object-fit:cover;border-radius:6px">` : ''}<div style="flex:1;min-width:0">
+      <div><b>${esc(x.publish_at.replace('T', ' '))} МСК</b> · <span class="${st}">${esc(x.status)}</span></div>
+      <div>${esc(x.title)}</div><div class="muted">рендер ${esc(x.source)} · профиль «${esc(x.user)}»${x.note ? ' · ' + esc(x.note) : ''}</div>
+      ${x.status === 'ошибка' ? `<div class="st-ошибка">${esc(x.error)}</div>` : ''}${bar}<div class="muted">${acts}</div></div></div>`;
+  }).join('') : 'Пока пусто';
+}
+function qOpen(id) {
+  const f = document.getElementById('q_form'), x = qItems.find(i => i.id === id);
+  qEdit = x ? x.id : null; f.reset();
+  document.getElementById('q_head').textContent = x ? 'Изменить ролик' : 'Ролик в очередь';
+  document.getElementById('q_cover_now').innerHTML = x && x.cover ? `Сейчас: <img src="queue/${x.id}/cover" style="width:96px;vertical-align:middle;border-radius:4px"> (пусто = оставить)` : '';
+  if (x) {
+    f.source.value = x.source; f.user.value = x.user; f.publish_at.value = x.publish_at;
+    f.title.value = x.title; f.description.value = x.description; f.tags.value = x.tags.join(', ');
+    f.synthetic.checked = x.synthetic !== false;
+  } else {
+    try { f.user.value = localStorage.getItem('upUser') || upUser; } catch (err) { f.user.value = upUser; }
+  }
+  document.getElementById('q_msg').textContent = '';
+  document.getElementById('q_dlg').showModal();
+}
+async function qSave() {
+  const f = document.getElementById('q_form'), m = document.getElementById('q_msg');
+  const form = new FormData(f); form.set('synthetic', f.synthetic.checked ? 'true' : 'false');
+  m.textContent = 'Сохраняю…';
+  const r = await fetch(qEdit ? `queue/${qEdit}` : 'queue', {method:'POST', body:form});
+  if (!r.ok) { m.textContent = 'Ошибка: ' + ((await r.json()).detail || r.status); return; }
+  document.getElementById('q_dlg').close(); qText = ''; qLoad();
+}
+async function qAct(id, act) {
+  if (act === 'delete' && !confirm('Убрать ролик из очереди? Длинное видео удалится, тестовый рендер останется.')) return;
+  const r = await fetch(act === 'delete' ? `queue/${id}` : `queue/${id}/retry`, {method: act === 'delete' ? 'DELETE' : 'POST'});
+  if (!r.ok) alert('Ошибка: ' + ((await r.json()).detail || r.status));
+  qText = ''; qLoad();
+}
+qLoad(); setInterval(qLoad, 5000);
 </script>
 </body>
 </html>
