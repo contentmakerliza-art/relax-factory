@@ -102,6 +102,14 @@
     <button type="button" onclick="qOpen(null)">Добавить ролик</button>
   </div>
 
+  <div class="card"><h2 style="margin:0 0 6px;font-size:18px">Telegram-бот для проб</h2>
+    <div class="muted">Проба приходит в Telegram минутным видео с кнопками «Одобряю» и «Поправить». Одобренную пробу нельзя удалить, её исходники откладываются в папку «Исходники».</div>
+    <div id="tg_state" class="muted" style="margin-top:8px"></div>
+    <label>Токен бота <span class="hint">из @BotFather; хранится только на сервере</span></label>
+    <input type="password" id="tg_token" autocomplete="off" style="width:100%;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--text);font:inherit">
+    <button type="button" onclick="tgToken()">Сохранить токен</button>
+  </div>
+
   <div class="card"><h2 style="margin:0 0 6px;font-size:18px">Google Диск для проб</h2>
     <div class="muted">Готовую пробу можно одной ссылкой отправить на Google Диск, она откроется на телефоне без пароля. Приложение видит только свою папку «Relax Factory — пробы».</div>
     <div id="gd_state" class="muted" style="margin-top:8px"></div>
@@ -292,6 +300,7 @@ async function load() {
     ${j.file ? ytLine(j) : ''}
     ${j.file ? upLine(j) : ''}
     ${j.file ? gdLine(j) : ''}
+    ${j.file ? tgLine(j) : ''}
     ${j.status !== 'работает' ? `<a href="#" onclick="del('${j.id}');return false">Удалить</a>` : ''}
   </div>`).join('');
 }
@@ -556,6 +565,50 @@ async function gdSend(id) {
   lastJobs = ''; load();
 }
 gdLoad();
+
+// ---------- Telegram ----------
+let tgOn = false;
+async function tgLoad() {
+  const r = await fetch('telegram'); if (!r.ok) return;
+  const d = await r.json(); tgOn = d.connected && d.chat;
+  document.getElementById('tg_state').innerHTML = !d.connected ? 'Бот не подключён'
+    : `Бот @${esc(d.bot)} · ${d.chat ? 'чат привязан · <a href="#" onclick="tgReset();return false">привязать другой чат</a>' : 'напишите боту /start в Telegram, потом обновите страницу'}`;
+  lastJobs = ''; load();
+}
+async function tgToken() {
+  const el = document.getElementById('tg_token'), form = new FormData(); form.append('token', el.value.trim());
+  const r = await fetch('telegram/token', {method:'POST', body:form}); el.value = '';
+  if (!r.ok) { document.getElementById('tg_state').textContent = 'Ошибка: ' + ((await r.json()).detail || r.status); return; }
+  tgLoad();
+}
+async function tgReset() {
+  if (!confirm('Следующий, кто напишет боту /start, станет его чатом. Продолжить?')) return;
+  await fetch('telegram/chat', {method:'DELETE'}); tgLoad();
+}
+function tgLine(j) {
+  const t = j.tg, a = j.approval;
+  let out = '';
+  if (a && a.status === 'одобрено') out += `<div class="st-готово">Одобрено${a.drive ? ` · <a href="${esc(a.drive)}" target="_blank">исходники на Диске</a>` : ''} · <a href="#" onclick="tgUnapprove('${j.id}');return false">снять одобрение</a></div>`;
+  else if (a && a.status === 'правка') out += `<div class="st-ошибка">Нужна правка</div>`;
+  else if (a && a.status === 'ждёт') out += `<div>Ждёт ответа в Telegram</div>`;
+  for (const c of (a && a.comments) || []) out += `<div class="muted">✏️ ${c.text ? esc(c.text) : ''}${c.voice ? ` <a href="jobs/${j.id}/comment/${esc(c.voice)}">голосовое</a>` : ''}</div>`;
+  if (t && t.status === 'отправляется') return out + '<div>Telegram: отправляется…</div>';
+  if (t && t.status === 'ошибка') out += `<div class="st-ошибка">Telegram: ${esc(t.error)}</div>`;
+  const acts = [tgOn ? `<a href="#" onclick="tgSend('${j.id}');return false">${t ? 'Отправить в Telegram ещё раз' : 'Отправить в Telegram на одобрение'}</a>` : '',
+    !(a && a.status === 'одобрено') ? `<a href="#" onclick="tgApprove('${j.id}');return false">одобрить здесь</a>` : ''].filter(Boolean).join(' · ');
+  return out + (acts ? `<div>${acts}</div>` : '');
+}
+async function tgSend(id) {
+  const r = await fetch(`jobs/${id}/telegram`, {method:'POST'});
+  if (!r.ok) alert('Ошибка: ' + ((await r.json()).detail || r.status));
+  lastJobs = ''; load();
+}
+async function tgApprove(id) { await fetch(`jobs/${id}/approve`, {method:'POST'}); lastJobs = ''; load(); }
+async function tgUnapprove(id) {
+  if (!confirm('Снять одобрение? Пробу снова можно будет удалить. Копия исходников останется.')) return;
+  await fetch(`jobs/${id}/approval`, {method:'DELETE'}); lastJobs = ''; load();
+}
+tgLoad();
 
 // ---------- Очередь роликов ----------
 let qItems = [], qText = '', qEdit = null;

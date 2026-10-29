@@ -31,7 +31,7 @@ from render.drive import fetch_folder
 from render.breathing import parse_script
 from render.engine import Breath, Job, RenderSettings, kit_dir, make_check_clips, probe_duration, render
 from render.scripts import DEFAULT, PRESETS
-from render import gdrive, uploadpost, youtube
+from render import gdrive, telegram, uploadpost, youtube
 
 DATA = Path(os.environ.get("APP_DATA", Path(__file__).parent / "data"))
 PASSWORD = os.environ.get("APP_PASSWORD", "")
@@ -146,7 +146,8 @@ def save_job(job_id: str, info: dict) -> None:
             "created": info.get("created"), "label": _label(info), "tracks": len(job.tracks),
             "output": job.output.name, "previews": [p.name for p in job.previews],
             "timecodes": job.timecodes, "warning": job.warning, "checks": job.checks, "settings": asdict(job.settings),
-            "youtube": info.get("yt"), "uploadpost": info.get("up"), "gdrive": info.get("gd")}
+            "youtube": info.get("yt"), "uploadpost": info.get("up"), "gdrive": info.get("gd"),
+            "approval": info.get("approval"), "telegram": info.get("tg")}
     try:
         (DATA / job_id / "job.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
     except OSError:
@@ -187,7 +188,8 @@ def load_jobs() -> None:
                              "progress": 1.0, "seconds": meta.get("seconds"),
                              "created": meta.get("created"), "label": meta["label"],
                              "tracks": meta.get("tracks", 0), "yt": meta.get("youtube"),
-                             "up": meta.get("uploadpost"), "gd": meta.get("gdrive")}
+                             "up": meta.get("uploadpost"), "gd": meta.get("gdrive"),
+                             "approval": meta.get("approval"), "tg": meta.get("telegram")}
         for key in ("yt", "gd"):
             st = jobs[folder.name][key]
             if st and st.get("status") == "загружается":
@@ -400,6 +402,8 @@ def list_jobs():
             "checks": job.checks if info["status"] == "готово" else "",
             "yt": info.get("yt"),
             "gd": info.get("gd"),
+            "approval": info.get("approval"),
+            "tg": info.get("tg"),
             "up": {k: v for k, v in info["up"].items() if k != "token"} if info.get("up") else None,
             "settings": asdict(job.settings),
         })
@@ -550,6 +554,8 @@ def delete(job_id: str):
         raise HTTPException(400, "Нельзя удалить")
     if job_id in _q_jobs():
         raise HTTPException(400, "Этот рендер нужен очереди роликов: сначала уберите ролик из очереди")
+    if _approved(info):
+        raise HTTPException(400, "Проба одобрена: сначала снимите одобрение")
     shutil.rmtree(DATA / job_id, ignore_errors=True)
     jobs.pop(job_id)
     return {"ok": True}
@@ -561,7 +567,7 @@ def cleanup(days: float = Form(7.0)):
     were never started (older than a day)."""
     now, freed, keep = time.time(), 0, _q_jobs()
     for job_id, info in list(jobs.items()):
-        if job_id in keep:
+        if job_id in keep or _approved(info):
             continue
         created = info.get("created") or (DATA / job_id).stat().st_mtime
         if info["status"] in ("готово", "ошибка") and now - created > days * 86400:
@@ -569,7 +575,7 @@ def cleanup(days: float = Form(7.0)):
             shutil.rmtree(DATA / job_id, ignore_errors=True)
             jobs.pop(job_id)
     for folder in DATA.iterdir():
-        if folder.is_dir() and folder.name not in jobs and folder != QDIR and now - folder.stat().st_mtime > 86400:
+        if folder.is_dir() and folder.name not in jobs and folder not in (QDIR, SRCDIR) and now - folder.stat().st_mtime > 86400:
             freed += _size(folder)
             shutil.rmtree(folder, ignore_errors=True)
     return {"freed_gb": round(freed / 1e9, 1), "free_gb": round(free_gb(), 1)}
@@ -804,6 +810,254 @@ def gdrive_upload(job_id: str):
     save_job(job_id, info)
     threading.Thread(target=_gdrive_worker, args=(job_id,), daemon=True).start()
     return {"ok": True}
+
+
+# ---------- Telegram: approving tests from the phone ----------
+
+SRCDIR = DATA / "sources"  # sources of approved tests, kept for the long renders
+TG_MAX_MB = 48  # Bot API takes files up to 50 MB
+
+
+def _approved(info: dict) -> bool:
+    return (info.get("approval") or {}).get("status") == "одобрено"
+
+
+@app.get("/telegram", dependencies=[Depends(check)])
+def telegram_state():
+    st = telegram.state()
+    return {"connected": bool(st.get("token")), "bot": st.get("bot", ""), "chat": bool(st.get("chat_id"))}
+
+
+@app.post("/telegram/token", dependencies=[Depends(check)])
+def telegram_token(token: str = Form(...)):
+    token = token.strip()
+    if not re.fullmatch(r"\d{5,15}:[\w-]{30,60}", token):
+        raise HTTPException(400, "Это не похоже на токен от @BotFather")
+    try:
+        return {"bot": telegram.set_token(token)}
+    except (RuntimeError, OSError) as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/telegram/chat", dependencies=[Depends(check)])
+def telegram_reset_chat():
+    """The next /start becomes the bot's chat."""
+    st = telegram.state()
+    st["chat_id"] = None
+    telegram.save(st)
+    return {"ok": True}
+
+
+def _tg_preview(job: Job) -> Path:
+    """The first minute, 720p, about 1 Mbit/s: opens fast on a weak phone connection."""
+    out = job.output.parent / "telegram_preview.mp4"
+    for rate in (1000, 600):
+        subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(job.output), "-t", "60",
+                        "-vf", "scale=-2:'min(720,ih)'", "-c:v", "libx264", "-preset", "veryfast",
+                        "-b:v", f"{rate}k", "-maxrate", f"{rate * 3 // 2}k", "-bufsize", f"{rate * 2}k",
+                        "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", str(out)],
+                       check=True, capture_output=True)
+        if out.stat().st_size < TG_MAX_MB * 1e6:
+            return out
+    raise RuntimeError("Превью не помещается в 50 МБ")
+
+
+def _tg_worker(job_id: str) -> None:
+    info = jobs[job_id]
+    tg = info["tg"]
+    try:
+        clip = _tg_preview(info["job"])
+        caption = f"{_label(info)}\n{job_id} · первая минута"
+        telegram.send_video(clip, caption, [[{"text": "✅ Одобряю", "callback_data": f"ok:{job_id}"},
+                                             {"text": "✏️ Поправить", "callback_data": f"fix:{job_id}"}]])
+        tg.update(status="отправлено", time=time.time())
+        if not info.get("approval"):
+            info["approval"] = {"status": "ждёт", "time": time.time(), "comments": []}
+    except Exception as e:
+        tg.update(status="ошибка", error=str(e)[:500])
+    save_job(job_id, info)
+
+
+@app.post("/jobs/{job_id}/telegram", dependencies=[Depends(check)])
+def telegram_send(job_id: str):
+    """A one-minute preview with «Одобряю» / «Поправить» buttons."""
+    info = jobs.get(job_id)
+    if not info or info["status"] != "готово" or not info["job"].output.exists():
+        raise HTTPException(404, "Нет готового видео")
+    st = telegram.state()
+    if not st.get("token"):
+        raise HTTPException(400, "Telegram-бот не подключён")
+    if not st.get("chat_id"):
+        raise HTTPException(400, "Напишите боту /start в Telegram")
+    if (info.get("tg") or {}).get("status") == "отправляется":
+        raise HTTPException(400, "Уже отправляется")
+    info["tg"] = {"status": "отправляется", "error": ""}
+    save_job(job_id, info)
+    threading.Thread(target=_tg_worker, args=(job_id,), daemon=True).start()
+    return {"ok": True}
+
+
+def _save_sources(job_id: str) -> None:
+    """Approved: the test's files and settings go to the sources folder (and to
+    Google Drive when it is connected)."""
+    info = jobs[job_id]
+    ap = info["approval"]
+    src, dst = DATA / job_id, SRCDIR / job_id
+    try:
+        for kind in KINDS:
+            for f in sorted((src / kind).iterdir()) if (src / kind).is_dir() else []:
+                if f.is_file():
+                    (dst / kind).mkdir(parents=True, exist_ok=True)
+                    target = dst / kind / f.name
+                    if not target.exists():
+                        try:
+                            os.link(f, target)
+                        except OSError:
+                            shutil.copy2(f, target)
+        dst.mkdir(parents=True, exist_ok=True)
+        if (src / "job.json").exists():  # not job.json: that would make it a job in the list
+            shutil.copy2(src / "job.json", dst / "settings.json")
+        ap["sources"] = str(dst.relative_to(DATA))
+        if gdrive.state():
+            ap["drive"] = gdrive.upload_folder(dst, f"{job_id} {_label(info)}"[:120])
+    except Exception as e:
+        ap["sources_error"] = str(e)[:300]
+    save_job(job_id, info)
+
+
+def _approve(job_id: str, via: str) -> None:
+    info = jobs[job_id]
+    ap = info.get("approval") or {"comments": []}
+    ap.update(status="одобрено", time=time.time(), via=via)
+    ap.pop("sources_error", None)
+    info["approval"] = ap
+    save_job(job_id, info)
+    threading.Thread(target=_save_sources, args=(job_id,), daemon=True).start()
+
+
+def _tg_handle(u: dict, st: dict) -> None:
+    msg, cb = u.get("message"), u.get("callback_query")
+    chat = ((msg or (cb or {}).get("message") or {}).get("chat") or {}).get("id")
+    text = (msg or {}).get("text", "")
+    if not st.get("chat_id"):
+        if msg and text.startswith("/start"):
+            st["chat_id"] = chat
+            telegram.save(st)
+            telegram.send_text("Готово: пробы будут приходить сюда.", chat)
+        return
+    if chat != st["chat_id"]:
+        return  # only her chat
+    if cb:
+        telegram.call("answerCallbackQuery", {"callback_query_id": cb["id"]})
+        act, _, job_id = (cb.get("data") or "").partition(":")
+        info = jobs.get(job_id)
+        if not info:
+            telegram.send_text(f"Пробы {job_id} уже нет на сервере.")
+        elif act == "ok":
+            _approve(job_id, "telegram")
+            telegram.send_text(f"Записала ✅ {_label(info)}")
+        elif act == "fix":
+            info["approval"] = {**(info.get("approval") or {"comments": []}), "status": "правка", "time": time.time()}
+            save_job(job_id, info)
+            st["await"] = job_id
+            telegram.save(st)
+            telegram.send_text(f"Напишите, что поправить в «{_label(info)}», текстом или голосовым.")
+        return
+    if not msg:
+        return
+    job_id = st.get("await")
+    info = jobs.get(job_id or "")
+    voice = msg.get("voice") or msg.get("audio")
+    if info and (text and not text.startswith("/") or voice):
+        note = {"time": time.time()}
+        if voice:
+            folder = DATA / job_id / "comments"
+            folder.mkdir(exist_ok=True)
+            name = time.strftime("%Y%m%d-%H%M%S") + ".ogg"
+            telegram.download(voice["file_id"], folder / name)
+            note["voice"] = name
+        if text or msg.get("caption"):
+            note["text"] = text or msg["caption"]
+        ap = info.get("approval") or {"status": "правка", "comments": []}
+        ap.setdefault("comments", []).append(note)
+        info["approval"] = ap
+        save_job(job_id, info)
+        st["await"] = None
+        telegram.save(st)
+        telegram.send_text("Записала комментарий ✏️")
+    elif text.startswith("/start"):
+        telegram.send_text("Бот на связи.")
+    else:
+        telegram.send_text("Чтобы оставить правку, нажмите «✏️ Поправить» под видео.")
+
+
+def _telegram_loop() -> None:
+    """Long polling: no webhook, so nothing on the server has to be open to Telegram."""
+    while True:
+        st = telegram.state()
+        if not st.get("token"):
+            time.sleep(10)
+            continue
+        try:
+            updates = telegram.call("getUpdates", {"offset": st.get("offset", 0), "timeout": 50,
+                                                   "allowed_updates": ["message", "callback_query"]}, timeout=70)
+        except Exception:
+            time.sleep(15)  # network, or a token changed meanwhile
+            continue
+        for u in updates:
+            st = telegram.state()
+            st["offset"] = u["update_id"] + 1
+            telegram.save(st)
+            try:
+                _tg_handle(u, st)
+            except Exception as e:  # one bad message must not stop the bot
+                print("telegram:", e, flush=True)
+
+
+threading.Thread(target=_telegram_loop, daemon=True).start()
+
+
+@app.get("/approvals", dependencies=[Depends(check)])
+def approvals():
+    """Tests sent for approval: status ждёт / одобрено / правка, the comments
+    (voice notes download from /jobs/{id}/comment/{name})."""
+    rows = []
+    for job_id, info in sorted(jobs.items(), reverse=True):
+        ap = info.get("approval")
+        if ap:
+            rows.append({"job_id": job_id, "label": _label(info), "status": ap.get("status"),
+                         "time": ap.get("time"), "comments": ap.get("comments", []),
+                         "sources": ap.get("sources", ""), "drive": ap.get("drive", ""),
+                         "error": ap.get("sources_error", "")})
+    return rows
+
+
+@app.post("/jobs/{job_id}/approve", dependencies=[Depends(check)])
+def approve(job_id: str):
+    if job_id not in jobs or jobs[job_id]["status"] != "готово":
+        raise HTTPException(404, "Нет готового видео")
+    _approve(job_id, "app")
+    return {"ok": True}
+
+
+@app.delete("/jobs/{job_id}/approval", dependencies=[Depends(check)])
+def unapprove(job_id: str):
+    """Takes the approval off: the test can be deleted again. Its copy in the
+    sources folder stays."""
+    info = jobs.get(job_id)
+    if not info or not info.get("approval"):
+        raise HTTPException(404)
+    info["approval"]["status"] = "снято"
+    save_job(job_id, info)
+    return {"ok": True}
+
+
+@app.get("/jobs/{job_id}/comment/{name}", dependencies=[Depends(check)])
+def comment_voice(job_id: str, name: str):
+    f = _job_dir(job_id) / "comments" / Path(name).name
+    if not f.is_file():
+        raise HTTPException(404)
+    return FileResponse(f, media_type="audio/ogg", filename=f.name)
 
 
 # ---------- Upload-Post ----------
