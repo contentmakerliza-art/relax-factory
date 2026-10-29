@@ -25,7 +25,7 @@ REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 API = "https://www.googleapis.com/youtube/v3"
 SCOPES = "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube"
 
-_states: dict[str, float] = {}  # OAuth state -> when it was issued
+_states: dict[str, tuple[float, str]] = {}  # OAuth state -> when it was issued, for what (youtube | drive)
 
 
 def _write(path: Path, data: dict) -> None:
@@ -64,19 +64,21 @@ def redirect_uri(fallback_host: str) -> str:
     return f"https://{host}/youtube/callback"
 
 
-def auth_url(redirect: str) -> str:
+def auth_url(redirect: str, scopes: str = SCOPES, kind: str = "youtube") -> str:
+    """Google's sign-in page. YouTube and Google Drive share one client and one
+    redirect address; the state remembers which one is being connected."""
     c = client()
     if not c:
         raise ValueError("Сначала загрузите ключ (JSON) из Google Cloud.")
     now = time.time()
-    for s, t in list(_states.items()):
+    for s, (t, _) in list(_states.items()):
         if now - t > 1800:
             del _states[s]
     state = secrets.token_urlsafe(24)
-    _states[state] = now
+    _states[state] = (now, kind)
     return AUTH_URL + "?" + urllib.parse.urlencode({
         "client_id": c["client_id"], "redirect_uri": redirect, "response_type": "code",
-        "scope": SCOPES, "access_type": "offline", "prompt": "consent",
+        "scope": scopes, "access_type": "offline", "prompt": "consent",
         "include_granted_scopes": "true", "state": state,
     })
 
@@ -99,15 +101,31 @@ def _get(url: str, token: str) -> dict:
         raise ValueError(f"YouTube ответил {e.code}: {e.read().decode(errors='replace')[:300]}")
 
 
-def finish(code: str, state: str, redirect: str) -> dict:
-    """Swaps the code from Google for tokens and remembers the channel."""
+def state_kind(state: str) -> str:
+    """What this sign-in was for, or '' when the link is stale."""
+    return _states.get(state, (0, ""))[1]
+
+
+def swap_code(code: str, state: str, redirect: str) -> dict:
+    """The code from Google -> tokens (once per state)."""
     if _states.pop(state, None) is None:
-        raise ValueError("Ссылка устарела. Нажмите «Подключить YouTube» ещё раз.")
+        raise ValueError("Ссылка устарела. Нажмите «Подключить» ещё раз.")
     c = client()
     if not c:
         raise ValueError("Ключ из Google Cloud не загружен.")
-    tok = _post(TOKEN_URL, {"code": code, "client_id": c["client_id"], "client_secret": c["client_secret"],
-                            "redirect_uri": redirect, "grant_type": "authorization_code"})
+    return _post(TOKEN_URL, {"code": code, "client_id": c["client_id"], "client_secret": c["client_secret"],
+                             "redirect_uri": redirect, "grant_type": "authorization_code"})
+
+
+def refresh(refresh_token: str) -> str:
+    c = client()
+    return _post(TOKEN_URL, {"refresh_token": refresh_token, "client_id": c["client_id"],
+                             "client_secret": c["client_secret"], "grant_type": "refresh_token"})["access_token"]
+
+
+def finish(code: str, state: str, redirect: str) -> dict:
+    """Swaps the code from Google for tokens and remembers the channel."""
+    tok = swap_code(code, state, redirect)
     refresh = tok.get("refresh_token")
     if not refresh:
         raise ValueError("Google не выдал постоянный доступ. Отзовите доступ в настройках аккаунта и подключите снова.")

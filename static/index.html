@@ -102,6 +102,12 @@
     <button type="button" onclick="qOpen(null)">Добавить ролик</button>
   </div>
 
+  <div class="card"><h2 style="margin:0 0 6px;font-size:18px">Google Диск для проб</h2>
+    <div class="muted">Готовую пробу можно одной ссылкой отправить на Google Диск, она откроется на телефоне без пароля. Приложение видит только свою папку «Relax Factory — пробы».</div>
+    <div id="gd_state" class="muted" style="margin-top:8px"></div>
+    <button type="button" id="gd_connect" onclick="location.href='gdrive/connect'">Подключить Google Диск</button>
+  </div>
+
   <div class="card"><h2 style="margin:0 0 6px;font-size:18px">Upload-Post</h2>
     <div class="muted" id="up_state"></div>
     <label>API-ключ <span class="hint">upload-post.com → API Keys; хранится только на сервере</span></label>
@@ -285,6 +291,7 @@ async function load() {
     ${j.file ? `<div><a href="#" onclick="shareLink('${j.id}');return false">Ссылка без пароля на 24 ч</a> <span class="muted">для Upload-Post</span> · <a href="#" onclick="unshare('${j.id}');return false">закрыть ссылки</a></div>` : ''}
     ${j.file ? ytLine(j) : ''}
     ${j.file ? upLine(j) : ''}
+    ${j.file ? gdLine(j) : ''}
     ${j.status !== 'работает' ? `<a href="#" onclick="del('${j.id}');return false">Удалить</a>` : ''}
   </div>`).join('');
 }
@@ -520,6 +527,35 @@ async function upSend() {
   document.getElementById('up_dlg').close(); lastJobs = ''; load();
 }
 upLoad();
+
+// ---------- Google Диск ----------
+let gdOn = false;
+async function gdLoad() {
+  const r = await fetch('gdrive'); if (!r.ok) return;
+  const d = await r.json(); gdOn = d.connected;
+  document.getElementById('gd_state').innerHTML = d.connected
+    ? `Подключён: ${esc(d.email)}${d.folder ? ` · <a href="${esc(d.folder)}" target="_blank">папка на Диске</a>` : ''} · <a href="#" onclick="gdOff();return false">отключить</a>`
+    : 'Не подключён';
+  document.getElementById('gd_connect').textContent = d.connected ? 'Подключить другой аккаунт' : 'Подключить Google Диск';
+  lastJobs = ''; load();
+}
+async function gdOff() {
+  if (!confirm('Отключить Google Диск? Файлы на Диске останутся.')) return;
+  await fetch('gdrive', {method:'DELETE'}); gdLoad();
+}
+function gdLine(j) {
+  const g = j.gd;
+  if (g && g.status === 'загружается') return `<div>Google Диск: загружается ${Math.round(g.progress * 100)}%</div>`;
+  if (g && g.status === 'загружено') return `<div class="st-готово">Google Диск: <a href="${esc(g.link)}" target="_blank">${esc(g.link)}</a></div>`;
+  const err = g && g.status === 'ошибка' ? `<div class="st-ошибка">Google Диск: ${esc(g.error)}</div>` : '';
+  return err + (gdOn && j.size_gb !== null && j.size_gb <= 10 ? `<div><a href="#" onclick="gdSend('${j.id}');return false">Отправить пробу на Google Диск</a></div>` : '');
+}
+async function gdSend(id) {
+  const r = await fetch(`jobs/${id}/gdrive`, {method:'POST'});
+  if (!r.ok) alert('Ошибка: ' + ((await r.json()).detail || r.status));
+  lastJobs = ''; load();
+}
+gdLoad();
 
 // ---------- Очередь роликов ----------
 let qItems = [], qText = '', qEdit = null;
