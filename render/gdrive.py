@@ -81,25 +81,22 @@ def _folder(token, d: dict) -> str:
     return folder
 
 
-def upload(video: Path, name: str, progress) -> str:
-    """Uploads in pieces (resumable) and returns a link that opens for anyone."""
-    d = json.loads(TOKEN.read_text(encoding="utf-8"))
-    token = _Token(d["refresh_token"])
-    folder = _folder(token, d)
-    size = video.stat().st_size
-    _, headers, _ = _call("POST", UPLOAD, token, json.dumps({"name": name, "parents": [folder]}).encode(), {
+def _resumable(token, path: Path, meta: dict, mime: str, progress) -> dict:
+    """Uploads in pieces: a dropped connection continues where it stopped."""
+    size = path.stat().st_size
+    _, headers, _ = _call("POST", UPLOAD, token, json.dumps(meta).encode(), {
         "Content-Type": "application/json; charset=utf-8",
-        "X-Upload-Content-Type": "video/mp4", "X-Upload-Content-Length": str(size)})
+        "X-Upload-Content-Type": mime, "X-Upload-Content-Length": str(size)})
     session = {k.lower(): v for k, v in headers.items()}["location"]
-    sent, fails, result = 0, 0, None
-    with video.open("rb") as f:
-        while result is None:
+    sent, fails = 0, 0
+    with path.open("rb") as f:
+        while True:
             f.seek(sent)
             piece = f.read(youtube.CHUNK)
             try:
                 code, h, raw = _call("PUT", session, token, piece,
-                                     {"Content-Range": f"bytes {sent}-{sent + len(piece) - 1}/{size}"},
-                                     ok=(200, 201, 308))
+                                     {"Content-Range": f"bytes {sent}-{sent + len(piece) - 1}/{size}"
+                                      if size else "bytes */0"}, ok=(200, 201, 308))
                 fails = 0
             except (ValueError, OSError) as e:
                 fails += 1
@@ -112,15 +109,52 @@ def upload(video: Path, name: str, progress) -> str:
                 except (ValueError, OSError):
                     continue
             if code in (200, 201):
-                result = json.loads(raw)
-                break
+                progress(1.0)
+                return json.loads(raw)
             got = {k.lower(): v for k, v in h.items()}.get("range")
             sent = int(got.split("-")[1]) + 1 if got else 0
             progress(sent / size)
-    progress(1.0)
+
+
+def _open() -> tuple:
+    d = json.loads(TOKEN.read_text(encoding="utf-8"))
+    token = _Token(d["refresh_token"])
+    return token, d, _folder(token, d)
+
+
+def upload(video: Path, name: str, progress) -> str:
+    """Returns a link that opens for anyone."""
+    token, _, folder = _open()
+    result = _resumable(token, video, {"name": name, "parents": [folder]}, "video/mp4", progress)
     # the folder is open by link; the file too, in case it is moved out of it
     _json(token, "POST", f"{API}/files/{result['id']}/permissions", {"role": "reader", "type": "anyone"})
     return result.get("webViewLink") or f"https://drive.google.com/file/d/{result['id']}/view"
+
+
+def _subfolder(token, name: str, parent: str) -> str:
+    q = urllib.parse.quote(f"name = '{name}' and '{parent}' in parents and trashed = false "
+                           "and mimeType = 'application/vnd.google-apps.folder'")
+    _, _, raw = _call("GET", f"{API}/files?q={q}&fields=files(id)", token)
+    found = json.loads(raw).get("files") or []
+    if found:
+        return found[0]["id"]
+    return _json(token, "POST", f"{API}/files", {"name": name, "parents": [parent],
+                                                 "mimeType": "application/vnd.google-apps.folder"})["id"]
+
+
+def upload_folder(src: Path, name: str) -> str:
+    """Copies a folder (with its subfolders) into «Исходники/<name>»; returns its link."""
+    token, _, root = _open()
+    top = _subfolder(token, name, _subfolder(token, "Исходники", root))
+    made = {src: top}
+    for p in sorted(src.rglob("*")):
+        parent = made[p.parent]
+        if p.is_dir():
+            made[p] = _subfolder(token, p.name, parent)
+        elif p.is_file():
+            _resumable(token, p, {"name": p.name, "parents": [parent]}, "application/octet-stream",
+                       lambda x: None)
+    return f"https://drive.google.com/drive/folders/{top}"
 
 
 def folder_link() -> str:
