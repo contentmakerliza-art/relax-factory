@@ -98,12 +98,13 @@ def _fetch_from_drive(info: dict, progress) -> None:
         job.visuals = clips or found
     if tracks_url:
         progress("Скачиваю треки с Google Диска", 0.0)
-        job.tracks = fetch_folder(tracks_url, folder / "tracks", AUDIO_EXTS)
+        job.tracks = fetch_folder(tracks_url, folder / "tracks", AUDIO_EXTS | VIDEO_EXTS)
     if pick and len(job.tracks) > pick:
         job.tracks = sorted(random.sample(job.tracks, pick))
     if ambient_url:
         progress("Скачиваю фоновый звук с Google Диска", 0.0)
-        job.ambient = fetch_folder(ambient_url, folder / "ambient", AUDIO_EXTS)[:5]
+        # a sound from Syntx «Видео в аудио» often comes as an .mp4
+        job.ambient = fetch_folder(ambient_url, folder / "ambient", AUDIO_EXTS | VIDEO_EXTS)[:5]
     if voice_url:
         progress("Скачиваю голос с Google Диска", 0.0)
         job.voice = fetch_folder(voice_url, folder / "voice", AUDIO_EXTS)[0]
