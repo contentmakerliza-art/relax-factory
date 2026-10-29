@@ -31,7 +31,7 @@ from render.drive import fetch_folder
 from render.breathing import parse_script
 from render.engine import Breath, Job, RenderSettings, kit_dir, make_check_clips, probe_duration, render
 from render.scripts import DEFAULT, PRESETS
-from render import uploadpost, youtube
+from render import gdrive, uploadpost, youtube
 
 DATA = Path(os.environ.get("APP_DATA", Path(__file__).parent / "data"))
 PASSWORD = os.environ.get("APP_PASSWORD", "")
@@ -146,7 +146,7 @@ def save_job(job_id: str, info: dict) -> None:
             "created": info.get("created"), "label": _label(info), "tracks": len(job.tracks),
             "output": job.output.name, "previews": [p.name for p in job.previews],
             "timecodes": job.timecodes, "warning": job.warning, "checks": job.checks, "settings": asdict(job.settings),
-            "youtube": info.get("yt"), "uploadpost": info.get("up")}
+            "youtube": info.get("yt"), "uploadpost": info.get("up"), "gdrive": info.get("gd")}
     try:
         (DATA / job_id / "job.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
     except OSError:
@@ -187,10 +187,11 @@ def load_jobs() -> None:
                              "progress": 1.0, "seconds": meta.get("seconds"),
                              "created": meta.get("created"), "label": meta["label"],
                              "tracks": meta.get("tracks", 0), "yt": meta.get("youtube"),
-                             "up": meta.get("uploadpost")}
-        yt = jobs[folder.name]["yt"]
-        if yt and yt.get("status") == "загружается":
-            yt["status"], yt["error"] = "ошибка", "Прервано: сервер обновлялся. Загрузите заново"
+                             "up": meta.get("uploadpost"), "gd": meta.get("gdrive")}
+        for key in ("yt", "gd"):
+            st = jobs[folder.name][key]
+            if st and st.get("status") == "загружается":
+                st["status"], st["error"] = "ошибка", "Прервано: сервер обновлялся. Загрузите заново"
 
 
 load_jobs()
@@ -398,6 +399,7 @@ def list_jobs():
             "warning": job.warning,
             "checks": job.checks if info["status"] == "готово" else "",
             "yt": info.get("yt"),
+            "gd": info.get("gd"),
             "up": {k: v for k, v in info["up"].items() if k != "token"} if info.get("up") else None,
             "settings": asdict(job.settings),
         })
@@ -647,6 +649,11 @@ def youtube_connect(request: Request):
 def youtube_callback(request: Request, state: str = "", code: str = "", error: str = ""):
     if error:
         text = f"Доступ не выдан ({error}). Можно попробовать ещё раз."
+    elif youtube.state_kind(state) == "drive":
+        try:
+            text = f"Google Диск подключён ({gdrive.finish(code, state, youtube.redirect_uri(request.url.netloc))})."
+        except (ValueError, OSError) as e:
+            text = f"Не получилось: {e}"
     else:
         try:
             ch = youtube.finish(code, state, youtube.redirect_uri(request.url.netloc))
@@ -738,6 +745,64 @@ async def youtube_upload(
                   "publish_at": publish_at}
     save_job(job_id, info)
     threading.Thread(target=_upload_worker, args=(job_id, channel, meta, cover, playlist), daemon=True).start()
+    return {"ok": True}
+
+
+# ---------- Google Drive: test videos to watch on the phone ----------
+
+@app.get("/gdrive", dependencies=[Depends(check)])
+def gdrive_state():
+    st = gdrive.state()
+    return {"connected": bool(st), "email": st["email"] if st else "", "folder": gdrive.folder_link()}
+
+
+@app.get("/gdrive/connect", dependencies=[Depends(check)])
+def gdrive_connect(request: Request):
+    try:
+        return RedirectResponse(youtube.auth_url(youtube.redirect_uri(request.url.netloc), gdrive.SCOPE, "drive"))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/gdrive", dependencies=[Depends(check)])
+def gdrive_disconnect():
+    gdrive.disconnect()
+    return {"ok": True}
+
+
+GDRIVE_MAX_GB = 10  # a test to watch, not a 10-hour video
+
+
+def _gdrive_worker(job_id: str) -> None:
+    info = jobs[job_id]
+    gd = info["gd"]
+    def progress(x: float) -> None:
+        gd["progress"] = round(x, 3)
+    try:
+        out: Path = info["job"].output
+        gd["link"] = gdrive.upload(out, f"{job_id} {out.name}", progress)
+        gd["status"] = "загружено"
+    except Exception as e:  # shown under the video
+        gd["status"], gd["error"] = "ошибка", str(e)[:500]
+    save_job(job_id, info)
+
+
+@app.post("/jobs/{job_id}/gdrive", dependencies=[Depends(check)])
+def gdrive_upload(job_id: str):
+    """The finished video goes to the app's folder on Google Drive; the link
+    opens for anyone (on a phone too) without the app's password."""
+    info = jobs.get(job_id)
+    if not info or info["status"] != "готово" or not info["job"].output.exists():
+        raise HTTPException(404, "Нет готового видео")
+    if not gdrive.state():
+        raise HTTPException(400, "Google Диск не подключён")
+    if (info.get("gd") or {}).get("status") == "загружается":
+        raise HTTPException(400, "Это видео уже загружается на Диск")
+    if info["job"].output.stat().st_size > GDRIVE_MAX_GB * 1e9:
+        raise HTTPException(400, f"Видео больше {GDRIVE_MAX_GB} ГБ: на Диск отправляются только пробы")
+    info["gd"] = {"status": "загружается", "progress": 0.0, "link": "", "error": ""}
+    save_job(job_id, info)
+    threading.Thread(target=_gdrive_worker, args=(job_id,), daemon=True).start()
     return {"ok": True}
 
 
