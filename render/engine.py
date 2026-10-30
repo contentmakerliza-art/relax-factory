@@ -448,7 +448,9 @@ def build_intro(clips: list[Path], seg: Path, seg_len: float, dst: Path, s: Rend
     _run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", str(raw)])
     d = probe_duration(raw)
     x = min(1.0, d / 2, seg_len / 2)
-    flt = (f"[0:v]fps={s.fps},setpts=PTS-STARTPTS[a];"
+    # fps= must come last on both inputs: ffmpeg 7 forgets the frame rate after
+    # setpts/trim, and xfade then refuses the input ("rate of 1/0 is invalid")
+    flt = (f"[0:v]setpts=PTS-STARTPTS,fps={s.fps}[a];"
            f"[1:v]trim=start={seg_len - x:.4f},setpts=PTS-STARTPTS,fps={s.fps}[b];"
            f"[a][b]xfade=transition=fade:duration={x:.4f}:offset={d - x:.4f},format=yuv420p[v]")
     _run(["ffmpeg", "-y", "-i", str(raw), "-i", str(seg), "-filter_complex", flt, "-map", "[v]",
