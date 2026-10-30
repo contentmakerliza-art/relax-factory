@@ -89,7 +89,10 @@ def _fetch_from_drive(info: dict, progress) -> None:
     """Download the clips and tracks from Google Drive links straight to the server."""
     job: Job = info["job"]
     folder = job.output.parent
-    visual_url, tracks_url, pick, ambient_url, mask_url, voice_url = info["drive"]
+    visual_url, tracks_url, pick, ambient_url, mask_url, voice_url, *more = info["drive"]
+    if intro_url := (more[0] if more else ""):
+        progress("Скачиваю вступление с Google Диска", 0.0)
+        job.intro = [p for p in fetch_folder(intro_url, folder / "intro", VIDEO_EXTS)]
     if visual_url:
         progress("Скачиваю клипы с Google Диска", 0.0)
         found = fetch_folder(visual_url, folder / "visual", VISUAL_EXTS)
@@ -204,7 +207,7 @@ threading.Thread(target=worker, daemon=True).start()
 
 
 CHUNK_LIMIT = 64 * 1024 * 1024
-KINDS = {"visual", "tracks", "ambient", "mask", "voice"}
+KINDS = {"visual", "tracks", "ambient", "mask", "voice", "intro"}
 
 
 MAX_FILE_GB = 20  # the server disk is small and shared
@@ -312,6 +315,7 @@ def start_job(
     stabilize: bool = Form(False),
     smooth: bool = Form(False),
     voice_url: str = Form(""),
+    intro_url: str = Form(""),
     breath_start: float = Form(16.0),
     breath_in: float = Form(4.0),
     breath_out: float = Form(6.0),
@@ -327,7 +331,11 @@ def start_job(
         raise HTTPException(400, "Задание уже запущено")
     folder = _job_dir(job_id)
     visual_url, tracks_url, ambient_url = visual_url.strip(), tracks_url.strip(), ambient_url.strip()
-    mask_url, voice_url = mask_url.strip(), voice_url.strip()
+    mask_url, voice_url, intro_url = mask_url.strip(), voice_url.strip(), intro_url.strip()
+    intro_dir = folder / "intro"
+    intro = [] if intro_url or not intro_dir.is_dir() else sorted(intro_dir.iterdir())
+    if any(f.suffix.lower() not in VIDEO_EXTS for f in intro):
+        raise HTTPException(400, "Вступление: только клипы (MP4, MOV)")
     voice_dir = folder / "voice"
     voice = None if voice_url or not voice_dir.is_dir() else next(iter(sorted(voice_dir.iterdir())), None)
     breathing = bool(voice or voice_url)
@@ -352,6 +360,8 @@ def start_job(
         raise HTTPException(400, str(exc))
     amb_dir = folder / "ambient"
     ambient = [] if ambient_url or not amb_dir.is_dir() else sorted(amb_dir.iterdir())[:5]
+    if breathing and (intro or intro_url):
+        raise HTTPException(400, "Вступление из клипов не сочетается с дыханием")
     if breathing and not (ambient or ambient_url):
         raise HTTPException(400, "Для вступления с дыханием нужен фоновый звук (дождь, волны)")
     visuals = [] if visual_url else sorted((folder / "visual").iterdir())
@@ -376,11 +386,11 @@ def start_job(
         raise HTTPException(400, problem)
     out = folder / f"{name}_{hours:g}h.mp4"
     jobs[job_id] = {"job": Job(visuals, trk, out, settings, ambient=ambient, mask=mask, still=still,
-                               voice=voice, breath=breath),
+                               voice=voice, breath=breath, intro=intro),
                     "status": "в очереди",
                     "step": "", "progress": 0.0, "created": time.time(),
-                    "drive": (visual_url, tracks_url, tracks_pick, ambient_url, mask_url, voice_url)
-                    if visual_url or tracks_url or ambient_url or mask_url or voice_url else None}
+                    "drive": (visual_url, tracks_url, tracks_pick, ambient_url, mask_url, voice_url, intro_url)
+                    if visual_url or tracks_url or ambient_url or mask_url or voice_url or intro_url else None}
     save_job(job_id, jobs[job_id])
     work.put(job_id)
     return {"id": job_id}
@@ -1493,7 +1503,8 @@ def _q_start_render(it: dict) -> None:
     shutil.copy2(QDIR / it["id"] / "cover.jpg", folder / "cover.jpg")
     out = folder / f"{visuals[0].stem}_{it['hours']:g}h.mp4"
     jobs[job_id] = {"job": Job(visuals, sorted((folder / "tracks").iterdir()), out, settings,
-                               ambient=sorted((folder / "ambient").iterdir())[:5], mask=mask, still=still),
+                               ambient=sorted((folder / "ambient").iterdir())[:5], mask=mask, still=still,
+                               intro=sorted((folder / "intro").iterdir())),
                     "status": "в очереди", "step": "", "progress": 0.0, "created": time.time(),
                     "label": f"Очередь: {it['title']}", "drive": None}
     save_job(job_id, jobs[job_id])

@@ -65,6 +65,7 @@ class Job:
     mask: Path | None = None            # black/white picture: white moves, black stays still
     still: Path | None = None           # the still picture under the mask (default: first frame)
     voice: Path | None = None           # breathing intro voice: intro + black screen instead of a loop
+    intro: list[Path] = field(default_factory=list)  # clips played once before the loop (in this order)
     breath: Breath = field(default_factory=Breath)
     previews: list[Path] = field(default_factory=list)   # filled by render()
     timecodes: str = ""                 # filled by render(): track list for the description
@@ -425,6 +426,33 @@ def _build_loop_segment(visuals: list[Path], dst: Path, s: RenderSettings, tmp: 
         _encode_list(_pingpong_parts(clip, d, s, tmp), dst, s, tmp)
     else:
         _encode_list([clip], dst, s, tmp)
+    return probe_duration(dst)
+
+
+def build_intro(clips: list[Path], seg: Path, seg_len: float, dst: Path, s: RenderSettings,
+                tmp: Path) -> float:
+    """Clips played once before the loop (the cat walks in and falls asleep).
+    Its last second blends into the loop's LAST second: the loop's end runs
+    into its own first frame, so the loop then starts from frame 0 with no
+    jump. Encoded like the loop, so the long video is still a plain copy.
+    The same push-in fix and stabilization as the loop; no mask (the mask
+    would freeze the cat)."""
+    parts = []
+    for i, c in enumerate(clips):
+        n = tmp / f"intro_{i:02d}.mp4"
+        _normalized_clip(c, n, replace(s, stab_mask=""))
+        parts.append(n)
+    raw = tmp / "intro_raw.mp4"
+    lst = tmp / "intro_list.txt"
+    lst.write_text("".join(f"file '{n}'\n" for n in parts))
+    _run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", str(raw)])
+    d = probe_duration(raw)
+    x = min(1.0, d / 2, seg_len / 2)
+    flt = (f"[0:v]fps={s.fps},setpts=PTS-STARTPTS[a];"
+           f"[1:v]trim=start={seg_len - x:.4f},setpts=PTS-STARTPTS,fps={s.fps}[b];"
+           f"[a][b]xfade=transition=fade:duration={x:.4f}:offset={d - x:.4f},format=yuv420p[v]")
+    _run(["ffmpeg", "-y", "-i", str(raw), "-i", str(seg), "-filter_complex", flt, "-map", "[v]",
+          "-an", *_video_codec_args(s), str(dst)])
     return probe_duration(dst)
 
 
@@ -837,6 +865,12 @@ def render(job: Job, progress: Progress | None = None) -> Path:
         seg = tmp / "loop.mp4"
         seg_len = build_loop_segment(job.visuals, seg, s, tmp, job.mask, job.still)
 
+        intro_len = 0.0
+        if job.intro:
+            say("Готовлю вступление", 0.25)
+            intro = tmp / "intro.mp4"
+            intro_len = build_intro(job.intro, seg, seg_len, intro, s, tmp)
+
         say("Делаю превью", 0.3)
         job.previews = make_previews(seg, seg_len, job.output)
 
@@ -850,14 +884,14 @@ def render(job: Job, progress: Progress | None = None) -> Path:
         job.output.with_suffix(".txt").write_text(job.timecodes + "\n", encoding="utf-8")
 
         say("Склеиваю видео до нужной длины", 0.8)
-        repeats = math.ceil(s.duration / seg_len) + 1
+        repeats = math.ceil(max(s.duration - intro_len, 0) / seg_len) + 1
         lst = tmp / "repeat.txt"
-        lst.write_text(f"file '{seg}'\n" * repeats)
+        lst.write_text((f"file '{intro}'\n" if intro_len else "") + f"file '{seg}'\n" * repeats)
         _run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(lst), "-i", str(audio),
               "-map", "0:v", "-map", "1:a", "-c", "copy", "-t", str(s.duration),
               str(job.output)])
         say("Готовлю сборку на компьютере", 0.9)
-        _kit(job, [], seg, audio)
+        _kit(job, [intro] if intro_len else [], seg, audio)
         say("Делаю кусочки для проверки", 0.95)
         make_check_clips(job)
     say("Готово", 1.0)

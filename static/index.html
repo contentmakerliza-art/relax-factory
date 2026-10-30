@@ -41,6 +41,11 @@
     <label>Картинка или клипы <span class="hint">одна картинка PNG/JPG или несколько клипов MP4, идут по очереди</span></label>
     <input type="file" name="visual" accept="image/*,video/*" multiple>
     <input type="url" name="visual_url" placeholder="или ссылка на Google Диск" style="margin-top:6px">
+    <details id="introbox"><summary>Вступление перед петлёй</summary>
+      <p class="hint" style="margin:6px 0">Клипы, которые идут один раз в начале (кот заходит и засыпает), по порядку имён файлов. Последняя секунда плавно переходит в петлю, звук идёт непрерывно.</p>
+      <input type="file" name="intro" accept="video/*" multiple>
+      <input type="url" name="intro_url" placeholder="или ссылка на Google Диск" style="margin-top:6px">
+    </details>
     <details id="maskbox"><summary>Маска: часть кадра стоит на месте</summary>
       <p class="hint" style="margin:6px 0">Чёрно-белая картинка: белое двигается (окна, огонь), чёрное всегда как на картинке. Можно добавить и исходную картинку, тогда файл маски назовите mask или маска.</p>
       <select name="mask_mode" style="margin-bottom:6px"><option value="still">Чёрное стоит как на картинке</option><option value="stab">Только для стабилизации: весь клип живой, снег в белом не сбивает её</option></select>
@@ -201,12 +206,12 @@ async function call(url, opts) {
 }
 f.addEventListener('submit', async e => {
   e.preventDefault();
-  const vUrl = f.visual_url.value.trim(), tUrl = f.tracks_url.value.trim(), aUrl = f.ambient_url.value.trim(), mUrl = f.mask_url.value.trim(), oUrl = f.voice_url.value.trim();
-  const visual = vUrl ? [] : f.visual.files, tracks = tUrl ? [] : f.tracks.files, ambient = aUrl ? [] : f.ambient.files, mask = mUrl ? [] : f.mask.files, voice = oUrl ? [] : f.voice.files;
+  const vUrl = f.visual_url.value.trim(), tUrl = f.tracks_url.value.trim(), aUrl = f.ambient_url.value.trim(), mUrl = f.mask_url.value.trim(), oUrl = f.voice_url.value.trim(), iUrl = f.intro_url.value.trim();
+  const visual = vUrl ? [] : f.visual.files, tracks = tUrl ? [] : f.tracks.files, ambient = aUrl ? [] : f.ambient.files, mask = mUrl ? [] : f.mask.files, voice = oUrl ? [] : f.voice.files, intro = iUrl ? [] : f.intro.files;
   if (!visual.length && !vUrl && !voice.length && !oUrl) { msg.textContent = 'Выберите клипы или вставьте ссылку на Google Диск'; return; }
   if (!tracks.length && !tUrl && !ambient.length && !aUrl) { msg.textContent = 'Выберите треки или фоновый звук (или вставьте ссылку на Google Диск)'; return; }
   const files = [...[...visual].map(x => ['visual', x]), ...[...tracks].map(x => ['tracks', x]),
-                 ...[...ambient].map(x => ['ambient', x]), ...[...mask].map(x => ['mask', x]), ...[...voice].map(x => ['voice', x])];
+                 ...[...ambient].map(x => ['ambient', x]), ...[...mask].map(x => ['mask', x]), ...[...voice].map(x => ['voice', x]), ...[...intro].map(x => ['intro', x])];
   const total = files.reduce((n, [, x]) => n + x.size, 0);
   let sent = 0;
   go.disabled = true;
@@ -230,7 +235,7 @@ f.addEventListener('submit', async e => {
       }
     }
     const form = new FormData(f);
-    form.delete('visual'); form.delete('tracks'); form.delete('ambient'); form.delete('mask'); form.delete('voice');
+    form.delete('visual'); form.delete('tracks'); form.delete('ambient'); form.delete('mask'); form.delete('voice'); form.delete('intro');
     await call(`jobs/${id}/start`, { method: 'POST', body: form });
     msg.textContent = 'Добавлено в очередь'; f.reset();
   } catch (err) {
