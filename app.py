@@ -31,7 +31,7 @@ from render.drive import fetch_folder
 from render.breathing import parse_script
 from render.engine import Breath, Job, RenderSettings, kit_dir, make_check_clips, probe_duration, render
 from render.scripts import DEFAULT, PRESETS
-from render import gdrive, telegram, uploadpost, youtube
+from render import gdrive, stt, telegram, uploadpost, youtube
 
 DATA = Path(os.environ.get("APP_DATA", Path(__file__).parent / "data"))
 PASSWORD = os.environ.get("APP_PASSWORD", "")
@@ -588,7 +588,7 @@ def cleanup(days: float = Form(7.0)):
             shutil.rmtree(DATA / job_id, ignore_errors=True)
             jobs.pop(job_id)
     for folder in DATA.iterdir():
-        if folder.is_dir() and folder.name not in jobs and folder not in (QDIR, SRCDIR) and now - folder.stat().st_mtime > 86400:
+        if folder.is_dir() and folder.name not in jobs and folder not in (QDIR, SRCDIR, DATA / "models") and now - folder.stat().st_mtime > 86400:
             freed += _size(folder)
             shutil.rmtree(folder, ignore_errors=True)
     return {"freed_gb": round(freed / 1e9, 1), "free_gb": round(free_gb(), 1)}
@@ -1030,10 +1030,55 @@ def _telegram_loop() -> None:
 threading.Thread(target=_telegram_loop, daemon=True).start()
 
 
+def _stt_pending() -> list[tuple[str, dict]]:
+    return [(job_id, note) for job_id, info in sorted(jobs.items())
+            for note in (info.get("approval") or {}).get("comments", [])
+            if note.get("voice") and "transcript" not in note and note.get("stt_tries", 0) < 3]
+
+
+def _stt_once() -> bool:
+    """Transcribes what is waiting; False when the model failed (wait longer)."""
+    todo = _stt_pending()
+    if not todo or (DATA / "busy").exists():
+        return True
+    files = [DATA / job_id / "comments" / note["voice"] for job_id, note in todo]
+    try:
+        texts = iter(stt.transcribe([f for f in files if f.exists()], DATA / "models"))
+    except Exception as e:  # e.g. the model could not be downloaded: try again later
+        for _, note in todo:
+            note["stt_tries"] = note.get("stt_tries", 0) + 1
+            note["stt_error"] = str(e)[:300]
+        print("stt:", e, flush=True)
+        return False
+    for (job_id, note), f in zip(todo, files):
+        text = next(texts) if f.exists() else ""
+        note["transcript"] = text
+        note.pop("stt_error", None)
+        note["text"] = "\n".join(x for x in (note.get("text", ""), text) if x) or "(в голосовом не разобрано слов)"
+        save_job(job_id, jobs[job_id])
+        if time.time() - note.get("time", 0) < 3600 and telegram.state().get("chat_id"):
+            try:  # so she sees what was heard
+                telegram.send_text(f"Расшифровала правку к «{_label(jobs[job_id])}»: {text or '—'}")
+            except Exception:
+                pass
+    return True
+
+
+def _stt_loop() -> None:
+    """Voice comments become text in the background; never during a render
+    (the model takes about half a GB of the container's memory)."""
+    while True:
+        time.sleep(30 if _stt_once() else 600)
+
+
+threading.Thread(target=_stt_loop, daemon=True).start()
+
+
 @app.get("/approvals", dependencies=[Depends(check)])
 def approvals():
     """Tests sent for approval: status ждёт / одобрено / правка, the comments
-    (voice notes download from /jobs/{id}/comment/{name})."""
+    (voice notes download from /jobs/{id}/comment/{name}; their text appears in
+    `text` once transcribed, `transcript` holds what was heard)."""
     rows = []
     for job_id, info in sorted(jobs.items(), reverse=True):
         ap = info.get("approval")
