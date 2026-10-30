@@ -68,7 +68,7 @@
     </details>
     <label>Треки <span class="hint">MP3, можно выбрать сразу все. Можно без треков, если есть фоновый звук</span></label>
     <input type="file" name="tracks" accept="audio/*" multiple>
-    <input type="url" name="tracks_url" placeholder="или ссылка на Google Диск" style="margin-top:6px">
+    <textarea name="tracks_url" rows="2" placeholder="или ссылка на Google Диск (можно несколько ссылок на mp3, по одной в строке)" style="margin-top:6px;width:100%"></textarea>
     <label>Фоновый звук <span class="hint">вода, дождь, камин. Можно 2–5 слоёв сразу (крыша, окно, капли): каждый зациклится сам. Слой тише: допишите в имя файла -6dB. С треками идёт тихо под музыкой</span></label>
     <input type="file" name="ambient" accept="audio/*" multiple>
     <input type="url" name="ambient_url" placeholder="или ссылка на Google Диск" style="margin-top:6px">
