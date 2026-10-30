@@ -42,9 +42,11 @@
     <input type="file" name="visual" accept="image/*,video/*" multiple>
     <input type="url" name="visual_url" placeholder="или ссылка на Google Диск" style="margin-top:6px">
     <details id="introbox"><summary>Вступление перед петлёй</summary>
-      <p class="hint" style="margin:6px 0">Клипы, которые идут один раз в начале (кот заходит и засыпает), по порядку имён файлов. Последняя секунда плавно переходит в петлю, звук идёт непрерывно.</p>
+      <p class="hint" style="margin:6px 0">Клипы, которые идут один раз в начале (кот заходит и засыпает), по порядку имён файлов. Вступление должно кончаться на первом кадре клипа петли, дальше ролик идёт без скачка; звук непрерывный.</p>
       <input type="file" name="intro" accept="video/*" multiple>
       <input type="url" name="intro_url" placeholder="или ссылка на Google Диск" style="margin-top:6px">
+      <label>Переход в петлю, сек <span class="hint">0 = встык: вступление кончается на первом кадре клипа петли</span></label>
+      <input type="number" name="intro_crossfade" value="0" min="0" max="3" step="any">
     </details>
     <details id="maskbox"><summary>Маска: часть кадра стоит на месте</summary>
       <p class="hint" style="margin:6px 0">Чёрно-белая картинка: белое двигается (окна, огонь), чёрное всегда как на картинке. Можно добавить и исходную картинку, тогда файл маски назовите mask или маска.</p>
