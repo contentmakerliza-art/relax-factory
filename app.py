@@ -98,7 +98,10 @@ def _fetch_from_drive(info: dict, progress) -> None:
         job.visuals = clips or found
     if tracks_url:
         progress("Скачиваю треки с Google Диска", 0.0)
-        job.tracks = fetch_folder(tracks_url, folder / "tracks", AUDIO_EXTS | VIDEO_EXTS)
+        # several links (one per line) make an album in the order given:
+        # Suno tracks from Syntx come as separate mp3 links
+        job.tracks = [t for url in tracks_url.split()
+                      for t in fetch_folder(url, folder / "tracks", AUDIO_EXTS | VIDEO_EXTS)]
     if pick and len(job.tracks) > pick:
         job.tracks = sorted(random.sample(job.tracks, pick))
     if ambient_url:
