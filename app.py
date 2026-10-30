@@ -967,6 +967,17 @@ def _tg_handle(u: dict, st: dict) -> None:
     if cb:
         telegram.call("answerCallbackQuery", {"callback_query_id": cb["id"]})
         act, _, job_id = (cb.get("data") or "").partition(":")
+        if act == "qr":
+            with qlock:
+                it = next((x for x in queue_items if x["id"] == job_id), None)
+                if it and it["status"] == "ошибка":
+                    _q_retry(it)
+                    _q_save()
+                    reply = f"Повторяю {_q_label(it)} 🔁"
+                else:
+                    reply = "Этот ролик уже не в ошибке." if it else "Этого ролика уже нет в очереди."
+            telegram.send_text(reply)
+            return
         info = jobs.get(job_id)
         if not info:
             telegram.send_text(f"Пробы {job_id} уже нет на сервере.")
@@ -1265,6 +1276,9 @@ QFILE = QDIR / "queue.json"
 Q_LEAD = float(os.environ.get("RELAX_QUEUE_LEAD_H", "24")) * 3600  # render this long before publishing
 Q_MAX_FILES = 2  # long videos kept on the server at once
 Q_FILES = ("рендер", "проверка", "отправлен")
+Q_SETTINGS = QDIR / "settings.json"
+Q_DIGEST = "02:00"  # daily summary in Telegram, Moscow time (09:00 in Vladivostok)
+q_outbox: list[tuple[str, str]] = []  # (text, item id for a retry button), sent once the lock is free
 qlock = threading.Lock()
 queue_items: list[dict] = []
 try:
@@ -1283,6 +1297,64 @@ def _q_save() -> None:
     tmp = QFILE.with_suffix(".tmp")
     tmp.write_text(json.dumps(queue_items, ensure_ascii=False, indent=1), encoding="utf-8")
     tmp.replace(QFILE)
+
+
+def _q_settings() -> dict:
+    try:
+        return {"digest": Q_DIGEST, **json.loads(Q_SETTINGS.read_text(encoding="utf-8"))}
+    except (OSError, ValueError):
+        return {"digest": Q_DIGEST}
+
+
+def _q_label(it: dict) -> str:
+    when = _q_when(it["publish_at"])
+    return f"«{it['title']}» ({when.day}.{when.month:02d} в {when:%H:%M} МСК)"
+
+
+def _q_say(text: str, retry: str = "") -> None:
+    q_outbox.append((text, retry))
+
+
+def _q_flush() -> None:
+    """Queue news to the Telegram bot's chat; dropped when no bot is set up."""
+    while q_outbox:
+        text, retry = q_outbox.pop(0)
+        if not telegram.state().get("chat_id"):
+            continue
+        params = {"chat_id": telegram.state()["chat_id"], "text": text}
+        if retry:
+            params["reply_markup"] = {"inline_keyboard": [[{"text": "🔁 Повторить", "callback_data": f"qr:{retry}"}]]}
+        try:
+            telegram.call("sendMessage", params)
+        except Exception as e:  # the network: the page still shows everything
+            print("queue telegram:", e, flush=True)
+
+
+def _q_count(n: int) -> str:
+    word = "ролик" if n % 10 == 1 and n % 100 != 11 else \
+        "ролика" if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14 else "роликов"
+    return f"{n} {word}"
+
+
+def _q_digest() -> None:
+    """Once a day at the set time: how many videos wait and which is next."""
+    st = _q_settings()
+    now = datetime.now(MSK)
+    if not st["digest"] or now.strftime("%H:%M") < st["digest"] or st.get("sent") == now.strftime("%Y-%m-%d"):
+        return
+    st["sent"] = now.strftime("%Y-%m-%d")
+    QDIR.mkdir(parents=True, exist_ok=True)
+    Q_SETTINGS.write_text(json.dumps(st), encoding="utf-8")
+    left = sorted((it for it in queue_items if it["status"] != "на YouTube"), key=lambda it: it["publish_at"])
+    if not left:
+        recent = any(time.time() - it.get("done_at", 0) < 3 * 86400 for it in queue_items)
+        if recent:
+            _q_say("📋 Очередь пуста: добавьте следующие ролики.")
+        return
+    text = f"📋 В очереди: {_q_count(len(left))}, ближайший — {_q_label(left[0])}, {left[0]['status']}."
+    if bad := sum(it["status"] == "ошибка" for it in left):
+        text += f" С ошибкой: {bad}."
+    _q_say(text)
 
 
 def _q_item(item_id: str) -> dict:
@@ -1393,6 +1465,7 @@ async def queue_add(
     synthetic: bool = Form(True),
     hours: float = Form(10.0),
     bitrate: int = Form(4),
+    render_now: bool = Form(False),
 ):
     source = source.strip()
     _q_source(source)
@@ -1400,7 +1473,7 @@ async def queue_add(
         raise HTTPException(400, "Длина от 0 до 12 часов, битрейт от 2 до 15 Мбит/с")
     it = {"id": uuid.uuid4().hex[:8], "source": source, "hours": hours, "bitrate": bitrate,
           "status": "ждёт", "error": "", "note": "", "job": "", "created": time.time(),
-          "host": request.url.netloc}
+          "host": request.url.netloc, "render_now": render_now}
     _q_fields(it, title, description, tags, publish_at, user, synthetic)
     raw = await _q_upload(cover_file)
     if raw is None and not cover_url.strip():
@@ -1427,6 +1500,27 @@ async def _q_upload(f: UploadFile | None) -> bytes | None:
     return raw
 
 
+@app.get("/queue/digest", dependencies=[Depends(check)])
+def queue_digest_get():
+    return {"time": _q_settings()["digest"]}
+
+
+@app.post("/queue/digest", dependencies=[Depends(check)])
+def queue_digest_set(time_msk: str = Form("")):
+    """Daily summary time in Telegram, 'HH:MM' Moscow time; empty = off."""
+    time_msk = time_msk.strip()
+    if time_msk and not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", time_msk):
+        raise HTTPException(400, "Время сводки: ЧЧ:ММ по Москве, например 02:00")
+    with qlock:
+        st = _q_settings()
+        st["digest"] = time_msk
+        if time_msk and datetime.now(MSK).strftime("%H:%M") >= time_msk:
+            st["sent"] = datetime.now(MSK).strftime("%Y-%m-%d")  # today's time has passed: from tomorrow
+        QDIR.mkdir(parents=True, exist_ok=True)
+        Q_SETTINGS.write_text(json.dumps(st), encoding="utf-8")
+    return {"time": time_msk}
+
+
 @app.post("/queue/{item_id}", dependencies=[Depends(check)])
 async def queue_edit(
     item_id: str,
@@ -1439,6 +1533,7 @@ async def queue_edit(
     cover_url: str = Form(""),
     cover_file: UploadFile | None = File(None),
     synthetic: bool = Form(True),
+    render_now: bool | None = Form(None),
 ):
     """Texts, date, profile and cover can change until the video is sent;
     the test render only until its long video is being made."""
@@ -1452,6 +1547,8 @@ async def queue_edit(
         _q_source(source)
         it["source"] = source
     _q_fields(it, title, description, tags, publish_at, user, synthetic)
+    if render_now is not None:
+        it["render_now"] = render_now
     raw = await _q_upload(cover_file)
     if raw is not None or cover_url.strip():
         await run_in_threadpool(_q_cover, item_id, raw, cover_url.strip())
@@ -1483,15 +1580,19 @@ def queue_retry(item_id: str):
         it = _q_item(item_id)
         if it["status"] != "ошибка":
             raise HTTPException(400, "Повторять нечего")
-        info = jobs.get(it.get("job") or "")
-        if info and info["status"] == "готово" and info["job"].output.exists():
-            it["status"] = "проверка"
-        else:
-            _q_drop_render(it)
-            it["status"] = "ждёт"
-        it["error"], it["note"] = "", ""
+        _q_retry(it)
         _q_save()
         return _q_public(it)
+
+
+def _q_retry(it: dict) -> None:
+    info = jobs.get(it.get("job") or "")
+    if info and info["status"] == "готово" and info["job"].output.exists():
+        it["status"] = "проверка"
+    else:
+        _q_drop_render(it)
+        it["status"] = "ждёт"
+    it["error"], it["note"] = "", ""
 
 
 @app.delete("/queue/{item_id}", dependencies=[Depends(check)])
@@ -1559,6 +1660,8 @@ def _q_start_render(it: dict) -> None:
     save_job(job_id, jobs[job_id])
     work.put(job_id)
     it.update(job=job_id, status="рендер", note="", error="")
+    again = "заново, сервер обновлялся" if it.get("restarts") else ""
+    _q_say(f"🎬 Начался рендер {_q_label(it)}{' (' + again + ')' if again else ''}.")
 
 
 def _stream_lengths(path: Path) -> dict:
@@ -1574,6 +1677,8 @@ def _clock(sec: float) -> str:
 
 def _q_fail(it: dict, text: str) -> None:
     it["status"], it["error"], it["failed_at"] = "ошибка", text[:500], time.time()
+    _q_say(f"⚠️ Ошибка в очереди: {_q_label(it)}. {text[:500]}\n"
+           "Когда исправите причину, нажмите «Повторить» здесь или в приложении.", it["id"])
 
 
 def _q_step(it: dict) -> None:
@@ -1618,11 +1723,13 @@ def _q_step(it: dict) -> None:
             _q_fail(it, f"Upload-Post: {e}")
             return
         it["status"], it["sent_at"] = "отправлен", time.time()
+        _q_say(f"📤 Видео {_q_label(it)} отправлено в Upload-Post, идёт загрузка на YouTube.")
     elif it["status"] == "отправлен":
         up = (info or {}).get("up") or {}
         if up.get("status") == "загружено":
             _q_drop_render(it)  # YouTube has it: the long file only takes space
             it["status"], it["done_at"] = "на YouTube", time.time()
+            _q_say(f"✅ На YouTube: {_q_label(it)}. Приватное, откроется само в это время.")
         elif up.get("status") == "ошибка" or not info:
             _q_fail(it, "Upload-Post: " + (up.get("error") or "видео пропало с сервера"))
 
@@ -1638,8 +1745,9 @@ def _q_files() -> int:
 
 
 def _q_next() -> None:
-    """Starts the next long render: one at a time, a day ahead, at most two
-    long files on the server, and only when the disk has room."""
+    """Starts the next long render: one at a time, a day ahead (or at once
+    when the item asks), at most two long files on the server, and only when
+    the disk has room."""
     if any(it["status"] == "рендер" for it in queue_items) or _q_files() >= Q_MAX_FILES:
         return
     now = datetime.now(MSK)
@@ -1649,8 +1757,8 @@ def _q_next() -> None:
         if when < now + timedelta(minutes=40):
             _q_fail(it, "Не успели сделать видео к времени публикации: поменяйте дату и нажмите «Повторить»")
             continue
-        if (when - now).total_seconds() > Q_LEAD:
-            return
+        if (when - now).total_seconds() > Q_LEAD and not it.get("render_now"):
+            continue
         if not (DATA / it["source"] / "job.json").exists():
             _q_fail(it, f"Тестового рендера {it['source']} больше нет на сервере")
             continue
@@ -1673,7 +1781,9 @@ def _queue_loop() -> None:
                     if it["status"] in ("рендер", "проверка", "отправлен"):
                         _q_step(it)
                 _q_next()
+                _q_digest()
                 _q_save()
+            _q_flush()
         except Exception as e:  # never let the loop die; shows on the page
             with qlock:
                 for it in queue_items:

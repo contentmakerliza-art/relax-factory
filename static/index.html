@@ -107,6 +107,7 @@
     <div class="muted">Одобренный тестовый рендер + тексты, обложка и время. Сервер сам делает длинное видео примерно за сутки до выхода, проверяет длину, отправляет через Upload-Post и удаляет длинный файл, когда YouTube его принял.</div>
     <div id="q_list" class="muted" style="margin-top:8px">Пока пусто</div>
     <button type="button" onclick="qOpen(null)">Добавить ролик</button>
+    <div class="muted" style="margin-top:8px">Новости очереди приходят в Telegram-бот. Сводка каждый день в <input type="time" id="q_digest" style="width:auto;display:inline-block;padding:2px 6px" onchange="qDigest()"> МСК (пусто = не присылать)</div>
   </div>
 
   <div class="card"><h2 style="margin:0 0 6px;font-size:18px">Telegram-бот для проб</h2>
@@ -174,6 +175,7 @@
     <input type="file" name="cover_file" accept="image/*" style="margin-top:6px">
     <div id="q_cover_now" class="muted"></div>
     <label style="font-weight:400"><input type="checkbox" name="synthetic" checked> Видео создано с помощью ИИ (раскрытие для YouTube)</label>
+    <label style="font-weight:400"><input type="checkbox" name="render_now"> Рендерить сразу, не ждать суток до выхода</label>
     <p class="muted">10 часов, 4 Мбит/с, те же клипы, звук и настройки, что в тестовом рендере. Приватное, YouTube сам откроет его в указанное время. Не для детей · «Люди и блоги» · английский.</p>
     <button type="button" onclick="qSave()">Сохранить</button>
     <button type="button" onclick="document.getElementById('q_dlg').close()" style="background:var(--line);color:var(--text);margin-top:8px">Отмена</button>
@@ -635,7 +637,7 @@ async function qLoad() {
       x.status !== 'отправлен' ? `<a href="#" onclick="qAct('${x.id}','delete');return false">удалить</a>` : ''].filter(Boolean).join(' · ');
     return `<div class="job" style="display:flex;gap:10px">${x.cover ? `<img src="queue/${x.id}/cover" style="width:96px;height:54px;object-fit:cover;border-radius:6px">` : ''}<div style="flex:1;min-width:0">
       <div><b>${esc(x.publish_at.replace('T', ' '))} МСК</b> · <span class="${st}">${esc(x.status)}</span></div>
-      <div>${esc(x.title)}</div><div class="muted">рендер ${esc(x.source)} · профиль «${esc(x.user)}»${x.note ? ' · ' + esc(x.note) : ''}</div>
+      <div>${esc(x.title)}</div><div class="muted">рендер ${esc(x.source)}${x.render_now && x.status === 'ждёт' ? ' · сразу' : ''} · профиль «${esc(x.user)}»${x.note ? ' · ' + esc(x.note) : ''}</div>
       ${x.status === 'ошибка' ? `<div class="st-ошибка">${esc(x.error)}</div>` : ''}${bar}<div class="muted">${acts}</div></div></div>`;
   }).join('') : 'Пока пусто';
 }
@@ -647,7 +649,7 @@ function qOpen(id) {
   if (x) {
     f.source.value = x.source; f.user.value = x.user; f.publish_at.value = x.publish_at;
     f.title.value = x.title; f.description.value = x.description; f.tags.value = x.tags.join(', ');
-    f.synthetic.checked = x.synthetic !== false;
+    f.synthetic.checked = x.synthetic !== false; f.render_now.checked = !!x.render_now;
   } else {
     try { f.user.value = localStorage.getItem('upUser') || upUser; } catch (err) { f.user.value = upUser; }
   }
@@ -657,6 +659,7 @@ function qOpen(id) {
 async function qSave() {
   const f = document.getElementById('q_form'), m = document.getElementById('q_msg');
   const form = new FormData(f); form.set('synthetic', f.synthetic.checked ? 'true' : 'false');
+  form.set('render_now', f.render_now.checked ? 'true' : 'false');
   m.textContent = 'Сохраняю…';
   const r = await fetch(qEdit ? `queue/${qEdit}` : 'queue', {method:'POST', body:form});
   if (!r.ok) { m.textContent = 'Ошибка: ' + ((await r.json()).detail || r.status); return; }
@@ -669,6 +672,12 @@ async function qAct(id, act) {
   qText = ''; qLoad();
 }
 qLoad(); setInterval(qLoad, 5000);
+async function qDigest() {
+  const form = new FormData(); form.set('time_msk', document.getElementById('q_digest').value);
+  const r = await fetch('queue/digest', {method:'POST', body:form});
+  if (!r.ok) alert('Ошибка: ' + ((await r.json()).detail || r.status));
+}
+fetch('queue/digest').then(r => r.ok && r.json()).then(d => { if (d) document.getElementById('q_digest').value = d.time; });
 </script>
 </body>
 </html>
