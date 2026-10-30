@@ -88,13 +88,12 @@ def _ramp(idx: list[int], vals: list[float]) -> str:
     return f"({expr})"
 
 
-def zoom_filter(src: Path, head: str) -> str:
-    """A perspective filter that enlarges and shifts each frame to the tightest
-    framing in the clip, so a slow push-in turns into a still camera and the
-    last frame lines up with the first. Empty if the clip does not zoom."""
+def _measure(src: Path, head: str):
+    """Measured frames and (scale, dy, dx) against the first frame, or None
+    when the clip does not zoom."""
     frames, fps = _frames(src, head)
     if len(frames) < fps * 2:
-        return ""
+        return None
     first = _blur(frames[:2].mean(axis=0))
     idx = list(range(0, len(frames), max(1, round(fps * STEP))))
     if idx[-1] != len(frames) - 1:
@@ -105,12 +104,37 @@ def zoom_filter(src: Path, head: str) -> str:
         z = found[-1][0]
     zs = [f[0] for f in found]
     if max(zs) - min(zs) < 0.006:
-        return ""
-    top = max(zs)
-    c = _ramp(idx, [top / z for z in zs])
-    dx = _ramp(idx, [f[2] / W for f in found])   # share of the frame width
-    dy = _ramp(idx, [f[1] / H for f in found])
+        return None
+    return idx, found
+
+
+def _perspective(c: str, dx: str, dy: str) -> str:
     x0, y0 = f"(W/2*(1-1/{c})+W*{dx})", f"(H/2*(1-1/{c})+H*{dy})"
     x1, y1 = f"(W-W/2*(1-1/{c})+W*{dx})", f"(H-H/2*(1-1/{c})+H*{dy})"
     return (f"perspective=x0='{x0}':y0='{y0}':x1='{x1}':y1='{y0}':"
             f"x2='{x0}':y2='{y1}':x3='{x1}':y3='{y1}':interpolation=cubic:eval=frame,")
+
+
+def zoom_filter(src: Path, head: str) -> str:
+    """A perspective filter that enlarges and shifts each frame to the tightest
+    framing in the clip, so a slow push-in turns into a still camera and the
+    last frame lines up with the first. Empty if the clip does not zoom."""
+    m = _measure(src, head)
+    if not m:
+        return ""
+    idx, found = m
+    top = max(f[0] for f in found)
+    c = _ramp(idx, [top / f[0] for f in found])
+    dx = _ramp(idx, [f[2] / W for f in found])   # share of the frame width
+    dy = _ramp(idx, [f[1] / H for f in found])
+    return _perspective(c, dx, dy)
+
+
+def start_filter(src: Path, head: str) -> str:
+    """The framing zoom_filter gives the clip's FIRST frame, held still: for an
+    intro that ends on that frame, so both are framed the same."""
+    m = _measure(src, head)
+    if not m:
+        return ""
+    top = max(f[0] for f in m[1])
+    return _perspective(f"{top:.6f}", "0", "0")

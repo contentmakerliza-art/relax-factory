@@ -316,6 +316,7 @@ def start_job(
     smooth: bool = Form(False),
     voice_url: str = Form(""),
     intro_url: str = Form(""),
+    intro_crossfade: float = Form(0.0),
     breath_start: float = Form(16.0),
     breath_in: float = Form(4.0),
     breath_out: float = Form(6.0),
@@ -360,6 +361,8 @@ def start_job(
         raise HTTPException(400, str(exc))
     amb_dir = folder / "ambient"
     ambient = [] if ambient_url or not amb_dir.is_dir() else sorted(amb_dir.iterdir())[:5]
+    if not 0 <= intro_crossfade <= 3:
+        raise HTTPException(400, "Переход от вступления: от 0 до 3 секунд")
     if breathing and (intro or intro_url):
         raise HTTPException(400, "Вступление из клипов не сочетается с дыханием")
     if breathing and not (ambient or ambient_url):
@@ -379,6 +382,7 @@ def start_job(
         speed=speed, loop_crossfade=loop_crossfade, find_loop_point=find_loop_point, track_crossfade=track_crossfade, shuffle_tracks=shuffle,
         codec=codec, video_bitrate=f"{bitrate}M", ambient_level=ambient_level,
         color_drift=color_drift, color_period=color_period, stabilize=stabilize, mask_mode=mask_mode if mask_mode in ("still", "stab") else "still", smooth=smooth,
+        intro_crossfade=intro_crossfade,
     )
     queued = sum(need_gb(i["job"].settings, _black(i)) for i in jobs.values()
                  if i["status"] in ("в очереди", "работает"))

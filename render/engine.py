@@ -22,7 +22,7 @@ from typing import Callable
 from render import breathing
 from render.breathing import Breath
 from render.mp4map import build_map
-from render.zoomfix import zoom_filter
+from render.zoomfix import start_filter, zoom_filter
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 
@@ -44,6 +44,7 @@ class RenderSettings:
     smooth: bool = False                # calm AI "boiling" of still textures, keep snow and fire
     mask_mode: str = "still"            # still: black part shows the picture | stab: mask only guides stabilization
     stab_mask: str = ""                 # set from the mask: its white (moving) part is ignored by stabilization
+    intro_crossfade: float = 0.0        # seconds of blend from the intro into the loop; 0 = straight cut
     image_segment: float = 10.0         # length of the still-image segment
     track_crossfade: float = 3.0        # seconds between tracks
     shuffle_tracks: bool = False        # reshuffle each pass over the album
@@ -173,7 +174,8 @@ def _stab_detect(src: Path, head: str, trf: Path, s: RenderSettings) -> None:
           "-t", f"{probe_duration(src):.3f}", "-f", "null", "-"])
 
 
-def _normalized_clip(src: Path, dst: Path, s: RenderSettings, skip_first: bool = False) -> float:
+def _normalized_clip(src: Path, dst: Path, s: RenderSettings, skip_first: bool = False,
+                     zoom: str | None = None) -> float:
     # skip_first: a chained clip starts on the previous clip's last frame; drop the repeat
     head = "trim=start_frame=1,setpts=PTS-STARTPTS," if skip_first else ""
     # strong temporal-only denoise: small frame-to-frame changes (a wall redrawn
@@ -184,7 +186,7 @@ def _normalized_clip(src: Path, dst: Path, s: RenderSettings, skip_first: bool =
     stab = ""
     # AI clips often creep toward the subject; the loop seam then jumps from
     # close-up back to wide. Hold the framing still instead.
-    head += zoom_filter(src, head)
+    head += zoom_filter(src, head) if zoom is None else zoom
     if s.stabilize and _has_vidstab():
         # tripod: every frame is held to the first one, as if on a tripod;
         # zoom 1% hides the edges the small shifts uncover
@@ -353,6 +355,10 @@ def build_loop_segment(visuals: list[Path], dst: Path, s: RenderSettings, tmp: P
             _run(["ffmpeg", "-y", "-i", str(clips[0]), "-frames:v", "1", str(still)])
         raw = tmp / "loop_unmasked.mp4"
         _build_loop_segment(clips, raw, replace(s, codec="work", stab_mask=str(mask)), tmp)
+        if (tmp / LEAD).exists():  # the lead-in gets the same still parts as the loop
+            plain = tmp / "lead_unmasked.mp4"
+            (tmp / LEAD).rename(plain)
+            _masked(plain, tmp / LEAD, still, mask, replace(s, codec="work"))
         if s.color_drift not in DRIFT:
             _masked(raw, dst, still, mask, s)
             return probe_duration(dst)
@@ -420,6 +426,13 @@ def _build_loop_segment(visuals: list[Path], dst: Path, s: RenderSettings, tmp: 
                   *_work_codec_args(s), str(cut_clip)])
             clip, d = cut_clip, probe_duration(cut_clip)
     if s.loop_mode in ("crossfade", "chain"):
+        # the loop starts x seconds into the clip (its head is blended into the
+        # seam): an intro that ends on the clip's first frame continues with
+        # this lead-in, played once, and then the loop
+        x = min(s.loop_crossfade, d / 2.5)
+        if x > 0:
+            _run(["ffmpeg", "-y", "-i", str(clip), "-vf", f"trim=end={x:.4f},setpts=PTS-STARTPTS,fps={s.fps}",
+                  "-an", *_work_codec_args(s), str(tmp / LEAD)])
         _crossfade_loop(clip, dst, d, s)
     elif s.loop_mode in ("pingpong", "chain_pingpong"):
         # chain_pingpong: the whole chain forward, then the whole chain backward
@@ -429,32 +442,58 @@ def _build_loop_segment(visuals: list[Path], dst: Path, s: RenderSettings, tmp: 
     return probe_duration(dst)
 
 
+LEAD = "lead_in.mp4"  # left in tmp by the loop build: the clip from its frame 0 to the loop's frame 0
+
+
 def build_intro(clips: list[Path], seg: Path, seg_len: float, dst: Path, s: RenderSettings,
-                tmp: Path) -> float:
+                tmp: Path, loop_clip: Path | None = None) -> float:
     """Clips played once before the loop (the cat walks in and falls asleep).
-    Its last second blends into the loop's LAST second: the loop's end runs
-    into its own first frame, so the loop then starts from frame 0 with no
-    jump. Encoded like the loop, so the long video is still a plain copy.
+    The intro is meant to end on the loop clip's first frame. The loop itself
+    starts a little into the clip (its head is blended into the loop seam), so
+    the clip's head is played once after the intro as a lead-in: intro →
+    clip from frame 0 → loop, with no jump and no double image. With
+    intro_crossfade > 0 the intro's tail is blended into that lead-in instead
+    of cut. Encoded like the loop, so the long video is still a plain copy.
     The same push-in fix and stabilization as the loop; no mask (the mask
     would freeze the cat)."""
+    lead = tmp / LEAD
+    # framed exactly like the loop clip's first frame (its push-in fix), not
+    # by its own measure: otherwise the cut shows a small jump in scale
+    zoom = None
+    if lead.exists() and loop_clip is not None:
+        zoom = start_filter(loop_clip, "hqdn3d=0:0:12:12," if s.smooth else "")
     parts = []
     for i, c in enumerate(clips):
         n = tmp / f"intro_{i:02d}.mp4"
-        _normalized_clip(c, n, replace(s, stab_mask=""))
+        _normalized_clip(c, n, replace(s, stab_mask=""), zoom=zoom)
         parts.append(n)
     raw = tmp / "intro_raw.mp4"
     lst = tmp / "intro_list.txt"
     lst.write_text("".join(f"file '{n}'\n" for n in parts))
     _run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", str(raw)])
     d = probe_duration(raw)
-    x = min(1.0, d / 2, seg_len / 2)
-    # fps= must come last on both inputs: ffmpeg 7 forgets the frame rate after
-    # setpts/trim, and xfade then refuses the input ("rate of 1/0 is invalid")
-    flt = (f"[0:v]setpts=PTS-STARTPTS,fps={s.fps}[a];"
-           f"[1:v]trim=start={seg_len - x:.4f},setpts=PTS-STARTPTS,fps={s.fps}[b];"
-           f"[a][b]xfade=transition=fade:duration={x:.4f}:offset={d - x:.4f},format=yuv420p[v]")
-    _run(["ffmpeg", "-y", "-i", str(raw), "-i", str(seg), "-filter_complex", flt, "-map", "[v]",
-          "-an", *_video_codec_args(s), str(dst)])
+    if lead.exists():
+        x = min(s.intro_crossfade, d / 2, probe_duration(lead))
+        # fps= must come last on both inputs: ffmpeg 7 forgets the frame rate after
+        # setpts/trim, and xfade then refuses the input ("rate of 1/0 is invalid")
+        join = (f"[a][b]xfade=transition=fade:duration={x:.4f}:offset={d - x:.4f}" if x > 0.04
+                else "[a][b]concat=n=2:v=1:a=0")
+        flt = (f"[0:v]setpts=PTS-STARTPTS,fps={s.fps}[a];[1:v]setpts=PTS-STARTPTS,fps={s.fps}[b];"
+               f"{join},format=yuv420p[v]")
+        _run(["ffmpeg", "-y", "-i", str(raw), "-i", str(lead), "-filter_complex", flt, "-map", "[v]",
+              "-an", *_video_codec_args(s), str(dst)])
+    elif s.intro_crossfade > 0.04:
+        # no lead-in (several clips in a ring, ping-pong): the intro's tail
+        # blends into the loop's last seconds, which run into its frame 0
+        x = min(s.intro_crossfade, d / 2, seg_len / 2)
+        flt = (f"[0:v]setpts=PTS-STARTPTS,fps={s.fps}[a];"
+               f"[1:v]trim=start={seg_len - x:.4f},setpts=PTS-STARTPTS,fps={s.fps}[b];"
+               f"[a][b]xfade=transition=fade:duration={x:.4f}:offset={d - x:.4f},format=yuv420p[v]")
+        _run(["ffmpeg", "-y", "-i", str(raw), "-i", str(seg), "-filter_complex", flt, "-map", "[v]",
+              "-an", *_video_codec_args(s), str(dst)])
+    else:
+        _run(["ffmpeg", "-y", "-i", str(raw), "-vf", f"setpts=PTS-STARTPTS,fps={s.fps},format=yuv420p",
+              "-an", *_video_codec_args(s), str(dst)])
     return probe_duration(dst)
 
 
@@ -871,7 +910,8 @@ def render(job: Job, progress: Progress | None = None) -> Path:
         if job.intro:
             say("Готовлю вступление", 0.25)
             intro = tmp / "intro.mp4"
-            intro_len = build_intro(job.intro, seg, seg_len, intro, s, tmp)
+            clips = [v for v in job.visuals if v.suffix.lower() not in IMAGE_EXTS]
+            intro_len = build_intro(job.intro, seg, seg_len, intro, s, tmp, clips[0] if clips else None)
 
         say("Делаю превью", 0.3)
         job.previews = make_previews(seg, seg_len, job.output)
