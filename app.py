@@ -1308,7 +1308,8 @@ def _q_settings() -> dict:
 
 def _q_label(it: dict) -> str:
     when = _q_when(it["publish_at"])
-    return f"«{it['title']}» ({when.day}.{when.month:02d} в {when:%H:%M} МСК)"
+    test = "ТЕСТ " if it.get("private_only") else ""
+    return f"{test}«{it['title']}» ({when.day}.{when.month:02d} в {when:%H:%M} МСК)"
 
 
 def _q_say(text: str, retry: str = "") -> None:
@@ -1466,6 +1467,7 @@ async def queue_add(
     hours: float = Form(10.0),
     bitrate: int = Form(4),
     render_now: bool = Form(False),
+    private_only: bool = Form(False),
 ):
     source = source.strip()
     _q_source(source)
@@ -1473,12 +1475,12 @@ async def queue_add(
         raise HTTPException(400, "Длина от 0 до 12 часов, битрейт от 2 до 15 Мбит/с")
     it = {"id": uuid.uuid4().hex[:8], "source": source, "hours": hours, "bitrate": bitrate,
           "status": "ждёт", "error": "", "note": "", "job": "", "created": time.time(),
-          "host": request.url.netloc, "render_now": render_now}
+          "host": request.url.netloc, "render_now": render_now,
+          "private_only": private_only}
     _q_fields(it, title, description, tags, publish_at, user, synthetic)
     raw = await _q_upload(cover_file)
-    if raw is None and not cover_url.strip():
-        raise HTTPException(400, "Нужна обложка: ссылка на файл в Google Диске или файл")
-    await run_in_threadpool(_q_cover, it["id"], raw, cover_url.strip())
+    if raw is not None or cover_url.strip():  # without a cover YouTube picks a frame itself
+        await run_in_threadpool(_q_cover, it["id"], raw, cover_url.strip())
     return await run_in_threadpool(_q_append, it)
 
 
@@ -1534,6 +1536,7 @@ async def queue_edit(
     cover_file: UploadFile | None = File(None),
     synthetic: bool = Form(True),
     render_now: bool | None = Form(None),
+    private_only: bool | None = Form(None),
 ):
     """Texts, date, profile and cover can change until the video is sent;
     the test render only until its long video is being made."""
@@ -1549,6 +1552,8 @@ async def queue_edit(
     _q_fields(it, title, description, tags, publish_at, user, synthetic)
     if render_now is not None:
         it["render_now"] = render_now
+    if private_only is not None:
+        it["private_only"] = private_only
     raw = await _q_upload(cover_file)
     if raw is not None or cover_url.strip():
         await run_in_threadpool(_q_cover, item_id, raw, cover_url.strip())
@@ -1650,7 +1655,8 @@ def _q_start_render(it: dict) -> None:
     found = sorted((folder / "visual").iterdir())
     visuals = [p for p in found if p.suffix.lower() in VIDEO_EXTS] or found
     mask, still = split_mask(sorted((folder / "mask").iterdir()))
-    shutil.copy2(QDIR / it["id"] / "cover.jpg", folder / "cover.jpg")
+    if (QDIR / it["id"] / "cover.jpg").exists():
+        shutil.copy2(QDIR / it["id"] / "cover.jpg", folder / "cover.jpg")
     out = folder / f"{visuals[0].stem}_{it['hours']:g}h.mp4"
     jobs[job_id] = {"job": Job(visuals, sorted((folder / "tracks").iterdir()), out, settings,
                                ambient=sorted((folder / "ambient").iterdir())[:5], mask=mask, still=still,
@@ -1712,13 +1718,15 @@ def _q_step(it: dict) -> None:
         if when < datetime.now(MSK) + timedelta(minutes=30):
             _q_fail(it, "Время публикации уже близко или прошло: поменяйте дату и нажмите «Повторить»")
             return
-        youtube_at = when.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        # a test stays private for good: no time for YouTube to publish it
+        youtube_at = "" if it.get("private_only") else when.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
         cover = QDIR / it["id"] / "cover.jpg"
         if cover.exists():  # it may have been changed after the render started
             shutil.copy2(cover, out.parent / "cover.jpg")
         try:
             _send_uploadpost(it["job"], it["host"], it["user"], it["title"], it["description"], it["tags"],
-                             "private", youtube_at, it["publish_at"], "cover.jpg", it.get("synthetic", True))
+                             "private", youtube_at, it["publish_at"],
+                             "cover.jpg" if (out.parent / "cover.jpg").exists() else "", it.get("synthetic", True))
         except RuntimeError as e:
             _q_fail(it, f"Upload-Post: {e}")
             return
@@ -1729,7 +1737,8 @@ def _q_step(it: dict) -> None:
         if up.get("status") == "загружено":
             _q_drop_render(it)  # YouTube has it: the long file only takes space
             it["status"], it["done_at"] = "на YouTube", time.time()
-            _q_say(f"✅ На YouTube: {_q_label(it)}. Приватное, откроется само в это время.")
+            _q_say(f"✅ На YouTube: {_q_label(it)}. " + ("Приватное и публиковаться не будет." if it.get("private_only")
+                                                       else "Приватное, откроется само в это время."))
         elif up.get("status") == "ошибка" or not info:
             _q_fail(it, "Upload-Post: " + (up.get("error") or "видео пропало с сервера"))
 
