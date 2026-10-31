@@ -1626,8 +1626,10 @@ def _q_update(item_id: str, it: dict) -> dict:
             raise HTTPException(400, "Ролик уже отправлен, менять поздно")
         if cur["source"] != it["source"] and cur.get("job"):
             raise HTTPException(400, "Длинное видео уже начато из прежнего рендера")
-        for k in ("source", "title", "description", "tags", "user", "synthetic", "publish_at"):
-            cur[k] = it[k]
+        for k in ("source", "title", "description", "tags", "user", "synthetic", "publish_at",
+                  "render_now", "private_only", "channel"):
+            if k in it:
+                cur[k] = it[k]
         _q_save()
         return _q_public(cur)
 
