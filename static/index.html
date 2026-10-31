@@ -285,11 +285,25 @@ async function shareLink(id) {
   try { await navigator.clipboard.writeText(d.url); } catch (err) {}
   prompt(`Ссылка скопирована, работает ${d.hours} ч. Любой, у кого она есть, может скачать видео:`, d.url);
 }
+// asks again on the page itself: a browser confirm() window freezes the tab
+// for Claude in Chrome. The second click within 5 s does it.
+let sureAt = {};
+function sure(text) {
+  const el = window.event && window.event.currentTarget;
+  const key = text + ((el && el.getAttribute && el.getAttribute('onclick')) || '');  // per button: the list redraws
+  if (Date.now() - (sureAt[key] || 0) < 5000) { sureAt[key] = 0; return true; }
+  sureAt[key] = Date.now();
+  if (el && el.textContent !== undefined) {
+    const was = el.textContent; el.textContent = text + ' Нажмите ещё раз.';
+    setTimeout(() => { if (el.isConnected) el.textContent = was; }, 5000);
+  }
+  return false;
+}
 async function unshare(id) {
-  if (!confirm('Закрыть все ссылки без пароля на это видео?')) return;
+  if (!sure('Закрыть все ссылки без пароля на это видео?')) return;
   await fetch(`jobs/${id}/share`, {method:'DELETE'}); alert('Ссылки закрыты');
 }
-async function del(id) { if (confirm('Удалить видео и файлы?')) { await fetch('jobs/' + id, {method:'DELETE'}); load(); } }
+async function del(id) { if (sure('Удалить видео и файлы?')) { await fetch('jobs/' + id, {method:'DELETE'}); load(); } }
 let lastJobs = '', lastList = [];
 async function load() {
   showDisk();
@@ -338,7 +352,7 @@ async function ytClient() {
   document.getElementById('yt_file').value = ''; ytLoad();
 }
 async function ytOff(id) {
-  if (!confirm('Отключить канал? Приложение потеряет к нему доступ.')) return;
+  if (!sure('Отключить канал? Приложение потеряет к нему доступ.')) return;
   await fetch('youtube/channels/' + id, {method:'DELETE'}); ytLoad();
 }
 let ytChannels = [], ytJob = null;
@@ -577,7 +591,7 @@ async function gdLoad() {
   lastJobs = ''; load();
 }
 async function gdOff() {
-  if (!confirm('Отключить Google Диск? Файлы на Диске останутся.')) return;
+  if (!sure('Отключить Google Диск? Файлы на Диске останутся.')) return;
   await fetch('gdrive', {method:'DELETE'}); gdLoad();
 }
 function gdLine(j) {
@@ -610,7 +624,7 @@ async function tgToken() {
   tgLoad();
 }
 async function tgReset() {
-  if (!confirm('Следующий, кто напишет боту /start, станет его чатом. Продолжить?')) return;
+  if (!sure('Следующий, кто напишет боту /start, станет его чатом. Продолжить?')) return;
   await fetch('telegram/chat', {method:'DELETE'}); tgLoad();
 }
 function tgLine(j) {
@@ -633,7 +647,7 @@ async function tgSend(id) {
 }
 async function tgApprove(id) { await fetch(`jobs/${id}/approve`, {method:'POST'}); lastJobs = ''; load(); }
 async function tgUnapprove(id) {
-  if (!confirm('Снять одобрение? Пробу снова можно будет удалить. Копия исходников останется.')) return;
+  if (!sure('Снять одобрение? Пробу снова можно будет удалить. Копия исходников останется.')) return;
   await fetch(`jobs/${id}/approval`, {method:'DELETE'}); lastJobs = ''; load();
 }
 tgLoad();
@@ -686,7 +700,7 @@ async function qSave() {
   document.getElementById('q_dlg').close(); qText = ''; qLoad();
 }
 async function qAct(id, act) {
-  if (act === 'delete' && !confirm('Убрать ролик из очереди? Длинное видео удалится, тестовый рендер останется.')) return;
+  if (act === 'delete' && !sure('Убрать ролик из очереди? Длинное видео удалится, тестовый рендер останется.')) return;
   const r = await fetch(act === 'delete' ? `queue/${id}` : `queue/${id}/retry`, {method: act === 'delete' ? 'DELETE' : 'POST'});
   if (!r.ok) alert('Ошибка: ' + ((await r.json()).detail || r.status));
   qText = ''; qLoad();
