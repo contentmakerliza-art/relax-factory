@@ -129,6 +129,10 @@
     <label>API-ключ <span class="hint">upload-post.com → API Keys; хранится только на сервере</span></label>
     <input type="password" id="up_key" autocomplete="off" style="width:100%;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--text);font:inherit">
     <button type="button" onclick="upKey()">Сохранить ключ</button>
+    <label>Разрешённые профили <span class="hint">через запятую; ключ общий с другими фабриками, поэтому в другие профили приложение не отправит ничего. Пусто = отправка запрещена</span></label>
+    <input type="text" id="up_allowed">
+    <button type="button" onclick="upAllowed()">Сохранить профили</button>
+    <div class="muted" id="up_profiles"></div>
   </div>
 
   <div class="card"><h2 style="margin:0 0 6px;font-size:18px">YouTube</h2>
@@ -506,7 +510,21 @@ async function upLoad() {
   const r = await fetch('uploadpost'); if (!r.ok) return;
   const d = await r.json(); upEnabled = d.enabled; upUser = d.user;
   document.getElementById('up_state').textContent = d.enabled ? 'Ключ сохранён на сервере' : 'Ключ ещё не сохранён';
+  document.getElementById('up_allowed').value = (d.allowed || []).join(', ');
   lastJobs = ''; load();
+  if (d.enabled) upProfiles();
+}
+async function upProfiles() {
+  const el = document.getElementById('up_profiles'), r = await fetch('uploadpost/profiles');
+  if (!r.ok) { el.textContent = 'Профили: ' + ((await r.json()).detail || r.status); return; }
+  el.innerHTML = 'Профили в аккаунте:<br>' + (await r.json()).map(p => `${p.allowed ? '✅' : '⛔'} <b>${esc(p.username)}</b>: ` +
+    (Object.entries(p.platforms).map(([k, v]) => `${esc(k)} ${v ? '«' + esc(v) + '»' : '(не подключён)'}`).join(', ') || 'ничего не подключено')).join('<br>');
+}
+async function upAllowed() {
+  const form = new FormData(); form.append('profiles', document.getElementById('up_allowed').value);
+  const r = await fetch('uploadpost/allowed', {method:'POST', body:form});
+  if (!r.ok) { alert('Ошибка: ' + ((await r.json()).detail || r.status)); return; }
+  upLoad();
 }
 async function upKey() {
   const el = document.getElementById('up_key'), form = new FormData(); form.append('key', el.value.trim());
@@ -638,7 +656,7 @@ async function qLoad() {
       x.status !== 'отправлен' ? `<a href="#" onclick="qAct('${x.id}','delete');return false">удалить</a>` : ''].filter(Boolean).join(' · ');
     return `<div class="job" style="display:flex;gap:10px">${x.cover ? `<img src="queue/${x.id}/cover" style="width:96px;height:54px;object-fit:cover;border-radius:6px">` : ''}<div style="flex:1;min-width:0">
       <div><b>${esc(x.publish_at.replace('T', ' '))} МСК</b> · <span class="${st}">${esc(x.status)}</span></div>
-      <div>${esc(x.title)}</div><div class="muted">рендер ${esc(x.source)}${x.render_now && x.status === 'ждёт' ? ' · сразу' : ''}${x.private_only ? ' · <b>тест, только приватно</b>' : ''} · профиль «${esc(x.user)}»${x.note ? ' · ' + esc(x.note) : ''}</div>
+      <div>${esc(x.title)}</div><div class="muted">рендер ${esc(x.source)}${x.channel ? ' · канал «' + esc(x.channel) + '»' : ''}${x.render_now && x.status === 'ждёт' ? ' · сразу' : ''}${x.private_only ? ' · <b>тест, только приватно</b>' : ''} · профиль «${esc(x.user)}»${x.note ? ' · ' + esc(x.note) : ''}</div>
       ${x.status === 'ошибка' ? `<div class="st-ошибка">${esc(x.error)}</div>` : ''}${bar}<div class="muted">${acts}</div></div></div>`;
   }).join('') : 'Пока пусто';
 }
