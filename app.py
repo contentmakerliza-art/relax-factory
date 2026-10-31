@@ -1141,7 +1141,32 @@ UPLOADING = DATA / "uploading"  # auto-update waits while Upload-Post is downloa
 
 @app.get("/uploadpost", dependencies=[Depends(check)])
 def uploadpost_state():
-    return {"enabled": bool(uploadpost.api_key()), "user": os.environ.get("UPLOAD_POST_USER", "")}
+    return {"enabled": bool(uploadpost.api_key()), "user": os.environ.get("UPLOAD_POST_USER", ""),
+            "allowed": uploadpost.allowed()}
+
+
+@app.post("/uploadpost/allowed", dependencies=[Depends(check)])
+def uploadpost_allowed(profiles: str = Form("")):
+    """Profile names this app may send to, separated by commas or lines; empty = no sending."""
+    names = list(dict.fromkeys(n.strip() for n in re.split(r"[,\n]", profiles) if n.strip()))
+    if any(not re.fullmatch(r"[\w.@\- ]{1,100}", n) for n in names):
+        raise HTTPException(400, "Имена профилей: буквы, цифры, точки, дефисы, через запятую")
+    uploadpost.save_allowed(names)
+    return {"allowed": names}
+
+
+@app.get("/uploadpost/profiles", dependencies=[Depends(check)])
+@app.get("/upload-post/profiles", dependencies=[Depends(check)])
+def uploadpost_profiles():
+    """The account's profiles and the channels connected to them."""
+    if not uploadpost.api_key():
+        raise HTTPException(400, "Нет API-ключа Upload-Post")
+    try:
+        rows = uploadpost.profiles()
+    except (RuntimeError, OSError, ValueError) as e:
+        raise HTTPException(502, str(e)[:300])
+    names = uploadpost.allowed()
+    return [{**r, "allowed": r["username"] in names} for r in rows]
 
 
 @app.post("/uploadpost/key", dependencies=[Depends(check)])
@@ -1177,6 +1202,10 @@ def uploadpost_send(
     user, title = user.strip(), title.strip()
     if not user:
         raise HTTPException(400, "Впишите профиль Upload-Post")
+    try:
+        uploadpost.check_allowed(user)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     if not title or len(title) > 100 or "<" in title or ">" in title:
         raise HTTPException(400, "Название: от 1 до 100 символов, без < и >")
     if len(description) > 5000:
@@ -1199,6 +1228,10 @@ def _send_uploadpost(job_id: str, host: str, user: str, title: str, description:
     """Hands the finished video to Upload-Post by a 24-hour link; the watcher
     below follows it from there."""
     info = jobs[job_id]
+    try:
+        uploadpost.check_allowed(user)  # every route goes through here
+    except ValueError as e:
+        raise RuntimeError(str(e)) from None
     token = _new_share(job_id, time.time() + 24 * 3600)
     base = f"https://{host}/share/{token}"
     fields = [("user", user), ("platform[]", "youtube"), ("video", f"{base}/{info['job'].output.name}"),
@@ -1309,7 +1342,8 @@ def _q_settings() -> dict:
 def _q_label(it: dict) -> str:
     when = _q_when(it["publish_at"])
     test = "ТЕСТ " if it.get("private_only") else ""
-    return f"{test}«{it['title']}» ({when.day}.{when.month:02d} в {when:%H:%M} МСК)"
+    where = it.get("user", "") + (f" / {it['channel']}" if it.get("channel") else "")
+    return f"{test}«{it['title']}» ({when.day}.{when.month:02d} в {when:%H:%M} МСК) → {where}"
 
 
 def _q_say(text: str, retry: str = "") -> None:
@@ -1426,11 +1460,29 @@ def _q_fields(it: dict, title: str, description: str, tags: str, publish_at: str
         raise HTTPException(400, "Теги вместе длиннее 500 символов")
     if not user:
         raise HTTPException(400, "Впишите профиль Upload-Post")
+    try:
+        uploadpost.check_allowed(user)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     when = _q_when(publish_at)
     if when < datetime.now(MSK) + timedelta(hours=1):
         raise HTTPException(400, "Время публикации должно быть хотя бы через час")
     it.update(title=title, description=description, tags=tag_list, user=user, synthetic=synthetic,
               publish_at=when.strftime("%Y-%m-%dT%H:%M"))
+
+
+def _q_channel(user: str) -> str:
+    """The YouTube channel of the profile, remembered with the item and
+    checked again before sending; '' when Upload-Post cannot be asked now."""
+    try:
+        channel = uploadpost.youtube_channel(user)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except (RuntimeError, OSError):
+        return ""
+    if not channel:
+        raise HTTPException(400, f"К профилю «{user}» в Upload-Post не подключён YouTube")
+    return channel
 
 
 def _q_public(it: dict) -> dict:
@@ -1478,6 +1530,7 @@ async def queue_add(
           "host": request.url.netloc, "render_now": render_now,
           "private_only": private_only}
     _q_fields(it, title, description, tags, publish_at, user, synthetic)
+    it["channel"] = await run_in_threadpool(_q_channel, it["user"])
     raw = await _q_upload(cover_file)
     if raw is not None or cover_url.strip():  # without a cover YouTube picks a frame itself
         await run_in_threadpool(_q_cover, it["id"], raw, cover_url.strip())
@@ -1554,6 +1607,7 @@ async def queue_edit(
         it["render_now"] = render_now
     if private_only is not None:
         it["private_only"] = private_only
+    it["channel"] = await run_in_threadpool(_q_channel, it["user"])
     raw = await _q_upload(cover_file)
     if raw is not None or cover_url.strip():
         await run_in_threadpool(_q_cover, item_id, raw, cover_url.strip())
@@ -1719,6 +1773,19 @@ def _q_step(it: dict) -> None:
             _q_fail(it, "Время публикации уже близко или прошло: поменяйте дату и нажмите «Повторить»")
             return
         # a test stays private for good: no time for YouTube to publish it
+        try:
+            channel = uploadpost.youtube_channel(it["user"])
+        except (RuntimeError, OSError):
+            channel = None  # Upload-Post unreachable: the send below says so
+        except ValueError as e:
+            _q_fail(it, str(e))
+            return
+        if channel is not None and (not channel or it.get("channel") and channel != it["channel"]):
+            _q_fail(it, f"Канал профиля «{it['user']}» сейчас «{channel or 'не подключён'}», "
+                        f"а при добавлении был «{it.get('channel') or '?'}»: проверьте профиль")
+            return
+        if channel and not it.get("channel"):
+            it["channel"] = channel
         youtube_at = "" if it.get("private_only") else when.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
         cover = QDIR / it["id"] / "cover.jpg"
         if cover.exists():  # it may have been changed after the render started
