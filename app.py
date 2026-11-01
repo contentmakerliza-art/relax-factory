@@ -573,6 +573,7 @@ def delete(job_id: str):
         raise HTTPException(400, "Этот рендер нужен очереди роликов: сначала уберите ролик из очереди")
     if _approved(info):
         raise HTTPException(400, "Проба одобрена: сначала снимите одобрение")
+    _keep_notes(job_id, info)
     shutil.rmtree(DATA / job_id, ignore_errors=True)
     jobs.pop(job_id)
     return {"ok": True}
@@ -584,15 +585,16 @@ def cleanup(days: float = Form(7.0)):
     were never started (older than a day)."""
     now, freed, keep = time.time(), 0, _q_jobs()
     for job_id, info in list(jobs.items()):
-        if job_id in keep or _approved(info):
+        if job_id in keep or _approved(info) or _awaiting(info):
             continue
         created = info.get("created") or (DATA / job_id).stat().st_mtime
         if info["status"] in ("готово", "ошибка") and now - created > days * 86400:
             freed += _size(DATA / job_id)
+            _keep_notes(job_id, info)
             shutil.rmtree(DATA / job_id, ignore_errors=True)
             jobs.pop(job_id)
     for folder in DATA.iterdir():
-        if folder.is_dir() and folder.name not in jobs and folder not in (QDIR, SRCDIR, DATA / "models") and now - folder.stat().st_mtime > 86400:
+        if folder.is_dir() and folder.name not in jobs and folder not in (QDIR, SRCDIR, NOTES, DATA / "models") and now - folder.stat().st_mtime > 86400:
             freed += _size(folder)
             shutil.rmtree(folder, ignore_errors=True)
     return {"freed_gb": round(freed / 1e9, 1), "free_gb": round(free_gb(), 1)}
@@ -832,11 +834,45 @@ def gdrive_upload(job_id: str):
 # ---------- Telegram: approving tests from the phone ----------
 
 SRCDIR = DATA / "sources"  # sources of approved tests, kept for the long renders
+NOTES = DATA / "notes"  # answers from the bot about tests no longer on the server
 TG_MAX_MB = 48  # Bot API takes files up to 50 MB
 
 
 def _approved(info: dict) -> bool:
     return (info.get("approval") or {}).get("status") == "одобрено"
+
+
+def _awaiting(info: dict) -> bool:
+    """Sent to the bot and not answered yet: the answer must find it."""
+    return (info.get("approval") or {}).get("status") == "ждёт"
+
+
+def _note_file(job_id: str) -> Path:
+    return NOTES / Path(job_id).name / "approval.json"
+
+
+def _read_note(job_id: str) -> dict | None:
+    try:
+        return json.loads(_note_file(job_id).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _write_note(job_id: str, note: dict) -> None:
+    f = _note_file(job_id)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps(note, ensure_ascii=False), encoding="utf-8")
+
+
+def _keep_notes(job_id: str, info: dict) -> None:
+    """Before a test is deleted: its bot answers and comments stay."""
+    ap = info.get("approval")
+    if not ap:
+        return
+    comments = DATA / job_id / "comments"
+    if comments.is_dir():
+        shutil.copytree(comments, NOTES / job_id / "comments", dirs_exist_ok=True)
+    _write_note(job_id, {"label": _label(info), "approval": ap, "deleted": time.time()})
 
 
 @app.get("/telegram", dependencies=[Depends(check)])
@@ -979,7 +1015,21 @@ def _tg_handle(u: dict, st: dict) -> None:
             telegram.send_text(reply)
             return
         info = jobs.get(job_id)
-        if not info:
+        if not info and re.fullmatch(r"\d{8}-\d{6}-[0-9a-f]{4}", job_id):
+            note = _read_note(job_id) or {"label": f"проба {job_id}", "approval": {"comments": []}}
+            if act == "ok":
+                note["approval"].update(status="одобрено", time=time.time())
+                _write_note(job_id, note)
+                telegram.send_text(f"Пробы {job_id} уже нет на сервере. Одобрение записала, "
+                                   "но для длинного ролика её нужно сделать заново.")
+            elif act == "fix":
+                note["approval"].update(status="правка", time=time.time())
+                _write_note(job_id, note)
+                st["await"] = job_id
+                telegram.save(st)
+                telegram.send_text(f"Пробы {job_id} уже нет на сервере, но правку запишу. "
+                                   "Напишите её текстом или голосовым.")
+        elif not info:
             telegram.send_text(f"Пробы {job_id} уже нет на сервере.")
         elif act == "ok":
             _approve(job_id, "telegram")
@@ -996,16 +1046,25 @@ def _tg_handle(u: dict, st: dict) -> None:
     job_id = st.get("await")
     info = jobs.get(job_id or "")
     voice = msg.get("voice") or msg.get("audio")
-    if info and (text and not text.startswith("/") or voice):
+    gone = not info and job_id and _read_note(job_id) is not None  # the test was deleted meanwhile
+    if (info or gone) and (text and not text.startswith("/") or voice):
         note = {"time": time.time()}
         if voice:
-            folder = DATA / job_id / "comments"
+            folder = (DATA if info else NOTES) / job_id / "comments"
             folder.mkdir(exist_ok=True)
             name = time.strftime("%Y%m%d-%H%M%S") + ".ogg"
             telegram.download(voice["file_id"], folder / name)
             note["voice"] = name
         if text or msg.get("caption"):
             note["text"] = text or msg["caption"]
+        if gone:
+            saved = _read_note(job_id)
+            saved["approval"].setdefault("comments", []).append(note)
+            _write_note(job_id, saved)
+            st["await"] = None
+            telegram.save(st)
+            telegram.send_text(f"Записала комментарий ✏️ Пробы {job_id} на сервере уже нет, правка сохранена отдельно.")
+            return
         ap = info.get("approval") or {"status": "правка", "comments": []}
         ap.setdefault("comments", []).append(note)
         info["approval"] = ap
@@ -1102,6 +1161,14 @@ def approvals():
                          "time": ap.get("time"), "comments": ap.get("comments", []),
                          "sources": ap.get("sources", ""), "drive": ap.get("drive", ""),
                          "error": ap.get("sources_error", "")})
+    for f in sorted(NOTES.glob("*/approval.json"), reverse=True) if NOTES.is_dir() else []:
+        job_id = f.parent.name
+        note = _read_note(job_id)
+        if job_id in jobs or not note:
+            continue
+        ap = note.get("approval") or {}
+        rows.append({"job_id": job_id, "label": note.get("label", ""), "status": ap.get("status"),
+                     "time": ap.get("time"), "comments": ap.get("comments", []), "deleted": True})
     return rows
 
 
@@ -1127,7 +1194,10 @@ def unapprove(job_id: str):
 
 @app.get("/jobs/{job_id}/comment/{name}", dependencies=[Depends(check)])
 def comment_voice(job_id: str, name: str):
-    f = _job_dir(job_id) / "comments" / Path(name).name
+    if job_id in jobs:
+        f = _job_dir(job_id) / "comments" / Path(name).name
+    else:
+        f = NOTES / Path(job_id).name / "comments" / Path(name).name
     if not f.is_file():
         raise HTTPException(404)
     return FileResponse(f, media_type="audio/ogg", filename=f.name)
