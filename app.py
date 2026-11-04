@@ -318,6 +318,8 @@ def start_job(
     voice_url: str = Form(""),
     intro_url: str = Form(""),
     intro_crossfade: float = Form(0.0),
+    ambient_from_job: str = Form(""),
+    intro_from_job: str = Form(""),
     breath_start: float = Form(16.0),
     breath_in: float = Form(4.0),
     breath_out: float = Form(6.0),
@@ -332,6 +334,10 @@ def start_job(
     if job_id in jobs:
         raise HTTPException(400, "Задание уже запущено")
     folder = _job_dir(job_id)
+    if ambient_from_job.strip():
+        _borrow(ambient_from_job.strip(), "ambient", folder)
+    if intro_from_job.strip():
+        _borrow(intro_from_job.strip(), "intro", folder)
     visual_url, tracks_url, ambient_url = visual_url.strip(), tracks_url.strip(), ambient_url.strip()
     mask_url, voice_url, intro_url = mask_url.strip(), voice_url.strip(), intro_url.strip()
     intro_dir = folder / "intro"
@@ -426,6 +432,60 @@ def list_jobs():
             "settings": asdict(job.settings),
         })
     return rows
+
+
+BORROW_KINDS = ("visual", "tracks", "ambient", "mask", "intro")
+
+
+def _source_dir(job_id: str, kind: str) -> Path | None:
+    """A job's own files of this kind, or the copy kept for an approved test."""
+    if not re.fullmatch(r"\d{8}-\d{6}-[0-9a-f]{4}", job_id) or kind not in BORROW_KINDS:
+        return None
+    for d in (DATA / job_id / kind, SRCDIR / job_id / kind):
+        if d.is_dir() and any(f.is_file() for f in d.iterdir()):
+            return d
+    return None
+
+
+def _borrow(src_id: str, kind: str, folder: Path) -> None:
+    """Takes another job's files (hard links: no extra space), e.g. an
+    approved sound bed for a new test."""
+    src = _source_dir(src_id, kind)
+    if not src:
+        raise HTTPException(400, f"У рендера {src_id} на сервере нет файлов «{kind}»")
+    dst = folder / kind
+    if dst.is_dir() and any(dst.iterdir()):
+        raise HTTPException(400, f"Файлы «{kind}» уже загружены: либо свои, либо из другого рендера")
+    dst.mkdir(exist_ok=True)
+    for f in sorted(src.iterdir()):
+        if f.is_file():
+            try:
+                os.link(f, dst / f.name)
+            except OSError:
+                shutil.copy2(f, dst / f.name)
+
+
+@app.get("/jobs/{job_id}/sources/{kind}", dependencies=[Depends(check)])
+def source_list(job_id: str, kind: str):
+    """Names and sizes of a job's source files (visual, tracks, ambient, mask, intro)."""
+    src = _source_dir(job_id, kind)
+    if not src:
+        return []
+    return [{"name": f.name, "bytes": f.stat().st_size} for f in sorted(src.iterdir()) if f.is_file()]
+
+
+@app.get("/jobs/{job_id}/sources/{kind}/{name}", dependencies=[Depends(check)])
+def source_file(job_id: str, kind: str, name: str):
+    src = _source_dir(job_id, kind)
+    f = src / Path(name).name if src else None
+    if not f or not f.is_file():
+        raise HTTPException(404)
+    return FileResponse(f, filename=f.name)
+
+
+@app.get("/jobs/{job_id}/ambient/{name}", dependencies=[Depends(check)])
+def ambient_file(job_id: str, name: str):
+    return source_file(job_id, "ambient", name)
 
 
 @app.get("/jobs/{job_id}/video", dependencies=[Depends(check)])
