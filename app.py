@@ -17,6 +17,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.parse
 import uuid
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
@@ -878,8 +879,36 @@ def _keep_notes(job_id: str, info: dict) -> None:
 @app.get("/telegram", dependencies=[Depends(check)])
 def telegram_state():
     st = telegram.state()
-    return {"connected": bool(st.get("token")), "bot": st.get("bot", ""), "chat": bool(st.get("chat_id"))}
+    return {"connected": bool(st.get("token")), "bot": st.get("bot", ""), "chat": bool(st.get("chat_id")),
+            "claude_url": st.get("claude_url", "")}
 
+
+@app.post("/telegram/claude", dependencies=[Depends(check)])
+def telegram_claude(url: str = Form("")):
+    """The chat with Claude that the bot's «Позвать Клода» button opens; {text}
+    in the link is replaced by the ready message. Empty = no button."""
+    url = url.strip()
+    if url and not re.fullmatch(r"https://[^\s<>\"]{4,1000}", url):
+        raise HTTPException(400, "Ссылка должна начинаться с https://")
+    st = telegram.state()
+    st["claude_url"] = url
+    telegram.save(st)
+    return {"claude_url": url}
+
+
+def _tg_done(text: str, job_id: str, label: str) -> None:
+    """The bot's answer after «Одобряю» or a comment, with a button to the chat
+    with Claude and the message to paste there (a tap on it copies it)."""
+    st = telegram.state()
+    ask = f"Проверь одобрение: {label} ({job_id})"
+    params = {"chat_id": st["chat_id"], "text": text}
+    url = st.get("claude_url", "")
+    if url:
+        params["text"] = f"{html.escape(text)}\n\nДля Клода (нажмите, чтобы скопировать):\n<code>{html.escape(ask)}</code>"
+        params["parse_mode"] = "HTML"
+        params["reply_markup"] = {"inline_keyboard": [[{"text": "💬 Позвать Клода",
+                                                        "url": url.replace("{text}", urllib.parse.quote(ask))}]]}
+    telegram.call("sendMessage", params)
 
 @app.post("/telegram/token", dependencies=[Depends(check)])
 def telegram_token(token: str = Form(...)):
@@ -1033,7 +1062,7 @@ def _tg_handle(u: dict, st: dict) -> None:
             telegram.send_text(f"Пробы {job_id} уже нет на сервере.")
         elif act == "ok":
             _approve(job_id, "telegram")
-            telegram.send_text(f"Записала ✅ {_label(info)}")
+            _tg_done(f"Записала ✅ {_label(info)}", job_id, _label(info))
         elif act == "fix":
             info["approval"] = {**(info.get("approval") or {"comments": []}), "status": "правка", "time": time.time()}
             save_job(job_id, info)
@@ -1063,7 +1092,8 @@ def _tg_handle(u: dict, st: dict) -> None:
             _write_note(job_id, saved)
             st["await"] = None
             telegram.save(st)
-            telegram.send_text(f"Записала комментарий ✏️ Пробы {job_id} на сервере уже нет, правка сохранена отдельно.")
+            _tg_done(f"Записала комментарий ✏️ Пробы {job_id} на сервере уже нет, правка сохранена отдельно.",
+                     job_id, saved.get("label", job_id))
             return
         ap = info.get("approval") or {"status": "правка", "comments": []}
         ap.setdefault("comments", []).append(note)
@@ -1071,7 +1101,7 @@ def _tg_handle(u: dict, st: dict) -> None:
         save_job(job_id, info)
         st["await"] = None
         telegram.save(st)
-        telegram.send_text("Записала комментарий ✏️")
+        _tg_done("Записала комментарий ✏️", job_id, _label(info))
     elif text.startswith("/start"):
         telegram.send_text("Бот на связи.")
     else:

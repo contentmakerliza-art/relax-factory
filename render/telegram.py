@@ -55,7 +55,8 @@ def set_token(token: str) -> str:
     the bot's @name."""
     me = call("getMe", token=token)
     call("deleteWebhook", token=token)
-    save({"token": token, "bot": me.get("username", ""), "chat_id": None, "offset": 0})
+    save({"token": token, "bot": me.get("username", ""), "chat_id": None, "offset": 0,
+          "claude_url": state().get("claude_url", "")})
     return me.get("username", "")
 
 

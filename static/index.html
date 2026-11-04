@@ -116,6 +116,9 @@
     <label>Токен бота <span class="hint">из @BotFather; хранится только на сервере</span></label>
     <input type="password" id="tg_token" autocomplete="off" style="width:100%;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--text);font:inherit">
     <button type="button" onclick="tgToken()">Сохранить токен</button>
+    <label>Ссылка на чат с Клодом <span class="hint">после «Одобряю» или правки бот покажет кнопку «Позвать Клода» с этой ссылкой и готовый текст «Проверь одобрение…»; {text} в ссылке заменится этим текстом. Пусто = без кнопки</span></label>
+    <input type="text" id="tg_claude" placeholder="https://claude.ai/…">
+    <button type="button" onclick="tgClaude()">Сохранить ссылку</button>
   </div>
 
   <div class="card"><h2 style="margin:0 0 6px;font-size:18px">Google Диск для проб</h2>
@@ -613,6 +616,7 @@ let tgOn = false;
 async function tgLoad() {
   const r = await fetch('telegram'); if (!r.ok) return;
   const d = await r.json(); tgOn = d.connected && d.chat;
+  document.getElementById('tg_claude').value = d.claude_url || '';
   document.getElementById('tg_state').innerHTML = !d.connected ? 'Бот не подключён'
     : `Бот @${esc(d.bot)} · ${d.chat ? 'чат привязан · <a href="#" onclick="tgReset();return false">привязать другой чат</a>' : 'напишите боту /start в Telegram, потом обновите страницу'}`;
   lastJobs = ''; load();
@@ -622,6 +626,12 @@ async function tgToken() {
   const r = await fetch('telegram/token', {method:'POST', body:form}); el.value = '';
   if (!r.ok) { document.getElementById('tg_state').textContent = 'Ошибка: ' + ((await r.json()).detail || r.status); return; }
   tgLoad();
+}
+async function tgClaude() {
+  const form = new FormData(); form.append('url', document.getElementById('tg_claude').value.trim());
+  const r = await fetch('telegram/claude', {method:'POST', body:form});
+  document.getElementById('tg_state').textContent = r.ok ? 'Ссылка сохранена' : 'Ошибка: ' + ((await r.json()).detail || r.status);
+  if (r.ok) setTimeout(tgLoad, 1500);
 }
 async function tgReset() {
   if (!sure('Следующий, кто напишет боту /start, станет его чатом. Продолжить?')) return;
