@@ -79,6 +79,7 @@
     <label>Фоновый звук <span class="hint">вода, дождь, камин. Можно 2–5 слоёв сразу (крыша, окно, капли): каждый зациклится сам. Слой тише: допишите в имя файла -6dB. С треками идёт тихо под музыкой</span></label>
     <input type="file" name="ambient" accept="audio/*" multiple>
     <input type="url" name="ambient_url" placeholder="или ссылка на Google Диск" style="margin-top:6px">
+    <input type="text" name="ambient_from_job" placeholder="или номер рендера, чей фоновый звук взять, например 20261030-085700-0fe1" style="margin-top:6px">
     <p class="hint" style="margin:6px 0 0">Ссылка на Диск быстрее загрузки, особенно с телефона. Доступ к папке: «Все, у кого есть ссылка».</p>
     <div class="row">
       <div><label>Длина, часов</label><input type="number" name="hours" value="3" min="0.1" max="12" step="any"></div>
@@ -218,10 +219,10 @@ async function call(url, opts) {
 }
 f.addEventListener('submit', async e => {
   e.preventDefault();
-  const vUrl = f.visual_url.value.trim(), tUrl = f.tracks_url.value.trim(), aUrl = f.ambient_url.value.trim(), mUrl = f.mask_url.value.trim(), oUrl = f.voice_url.value.trim(), iUrl = f.intro_url.value.trim();
+  const vUrl = f.visual_url.value.trim(), tUrl = f.tracks_url.value.trim(), aUrl = f.ambient_url.value.trim() || f.ambient_from_job.value.trim(), mUrl = f.mask_url.value.trim(), oUrl = f.voice_url.value.trim(), iUrl = f.intro_url.value.trim();
   const visual = vUrl ? [] : f.visual.files, tracks = tUrl ? [] : f.tracks.files, ambient = aUrl ? [] : f.ambient.files, mask = mUrl ? [] : f.mask.files, voice = oUrl ? [] : f.voice.files, intro = iUrl ? [] : f.intro.files;
   if (!visual.length && !vUrl && !voice.length && !oUrl) { msg.textContent = 'Выберите клипы или вставьте ссылку на Google Диск'; return; }
-  if (!tracks.length && !tUrl && !ambient.length && !aUrl) { msg.textContent = 'Выберите треки или фоновый звук (или вставьте ссылку на Google Диск)'; return; }
+  if (!tracks.length && !tUrl && !ambient.length && !aUrl && !f.ambient_from_job.value.trim()) { msg.textContent = 'Выберите треки или фоновый звук (или вставьте ссылку на Google Диск)'; return; }
   const files = [...[...visual].map(x => ['visual', x]), ...[...tracks].map(x => ['tracks', x]),
                  ...[...ambient].map(x => ['ambient', x]), ...[...mask].map(x => ['mask', x]), ...[...voice].map(x => ['voice', x]), ...[...intro].map(x => ['intro', x])];
   const total = files.reduce((n, [, x]) => n + x.size, 0);
