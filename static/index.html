@@ -171,7 +171,7 @@
     <label>Обложка <span class="hint">кадр из видео или свой файл JPEG до 2 МБ</span></label>
     <div class="thumbs" id="yt_thumbs"></div><input type="hidden" name="thumb" value="0">
     <input type="file" name="thumb_file" accept="image/jpeg">
-    <label style="font-weight:400"><input type="checkbox" name="synthetic" value="true" checked> Видео создано с помощью ИИ (раскрытие для YouTube)</label>
+    <label style="font-weight:400"><input type="checkbox" name="synthetic" value="true"> Видео создано с помощью ИИ (раскрытие для YouTube)</label>
     <p class="muted">Не для детей · категория «Люди и блоги» · язык английский. Видео загружается приватным и само станет публичным в указанное время.</p>
     <button type="button" onclick="ytSend()">Загрузить</button>
     <button type="button" onclick="document.getElementById('yt_dlg').close()" style="background:var(--line);color:var(--text);margin-top:8px">Отмена</button>
@@ -191,7 +191,7 @@
     <input type="text" name="cover_url" placeholder="https://drive.google.com/file/d/…">
     <input type="file" name="cover_file" accept="image/*" style="margin-top:6px">
     <div id="q_cover_now" class="muted"></div>
-    <label style="font-weight:400"><input type="checkbox" name="synthetic" checked> Видео создано с помощью ИИ (раскрытие для YouTube)</label>
+    <label style="font-weight:400"><input type="checkbox" name="synthetic"> Видео создано с помощью ИИ (раскрытие для YouTube)</label>
     <label style="font-weight:400"><input type="checkbox" name="render_now"> Рендерить сразу, не ждать суток до выхода</label>
     <label style="font-weight:400"><input type="checkbox" name="private_only"> Только приватно (тест): YouTube не опубликует, дата нужна только для расписания</label>
     <p class="muted">10 часов, 4 Мбит/с, те же клипы, звук и настройки, что в тестовом рендере. Приватное, YouTube сам откроет его в указанное время. Не для детей · «Люди и блоги» · английский.</p>
@@ -212,7 +212,7 @@
     <label>Опубликовать <span class="hint">по Москве; видео загрузится сразу приватным, YouTube сам откроет его в это время. Пусто = доступ как выбран выше</span></label><input type="datetime-local" name="publish_at">
     <label>Обложка <span class="hint">кадр из видео</span></label>
     <div class="thumbs" id="up_thumbs"></div><input type="hidden" name="thumb" value="0">
-    <label style="font-weight:400"><input type="checkbox" name="synthetic" value="true" checked> Видео создано с помощью ИИ (раскрытие для YouTube)</label>
+    <label style="font-weight:400"><input type="checkbox" name="synthetic" value="true"> Видео создано с помощью ИИ (раскрытие для YouTube)</label>
     <button type="button" onclick="upSend()">Отправить</button>
     <button type="button" onclick="document.getElementById('up_dlg').close()" style="background:var(--line);color:var(--text);margin-top:8px">Отмена</button>
     <p class="muted" id="up_send_msg"></p>
@@ -719,7 +719,7 @@ function qOpen(id) {
   if (x) {
     f.source.value = x.source; f.user.value = x.user; f.publish_at.value = x.publish_at;
     f.title.value = x.title; f.description.value = x.description; f.tags.value = x.tags.join(', ');
-    f.synthetic.checked = x.synthetic !== false; f.render_now.checked = !!x.render_now; f.private_only.checked = !!x.private_only;
+    f.synthetic.checked = !!x.synthetic; f.render_now.checked = !!x.render_now; f.private_only.checked = !!x.private_only;
   } else {
     try { f.user.value = localStorage.getItem('upUser') || upUser; } catch (err) { f.user.value = upUser; }
   }
