@@ -950,7 +950,7 @@ def _keep_notes(job_id: str, info: dict) -> None:
 def telegram_state():
     st = telegram.state()
     return {"connected": bool(st.get("token")), "bot": st.get("bot", ""), "chat": bool(st.get("chat_id")),
-            "claude_url": st.get("claude_url", "")}
+            "claude_url": _claude_url()}
 
 
 @app.post("/telegram/claude", dependencies=[Depends(check)])
@@ -966,18 +966,31 @@ def telegram_claude(url: str = Form("")):
     return {"claude_url": url}
 
 
+# the project's main chat, where Claude checks the answers in every channel thread
+CLAUDE_URL = "https://claude.ai/code/project/chan_012LrQ7Bt8DREicJyZMa6Q2t"
+CLAUDE_ASK = "Проверь одобрения"
+
+
+def _claude_url() -> str:
+    """The link set on the card; until one is set, the project chat. Saved empty = no button."""
+    st = telegram.state()
+    return st["claude_url"] if "claude_url" in st else CLAUDE_URL
+
+
+def _claude_button() -> list[list[dict]]:
+    url = _claude_url()
+    return [[{"text": "💬 Позвать Клода", "url": url.replace("{text}", urllib.parse.quote(CLAUDE_ASK))}]] if url else []
+
+
 def _tg_done(text: str, job_id: str, label: str) -> None:
     """The bot's answer after «Одобряю» or a comment, with a button to the chat
     with Claude and the message to paste there (a tap on it copies it)."""
     st = telegram.state()
-    ask = f"Проверь одобрение: {label} ({job_id})"
     params = {"chat_id": st["chat_id"], "text": text}
-    url = st.get("claude_url", "")
-    if url:
-        params["text"] = f"{html.escape(text)}\n\nДля Клода (нажмите, чтобы скопировать):\n<code>{html.escape(ask)}</code>"
+    if button := _claude_button():
+        params["text"] = f"{html.escape(text)}\n\nДля Клода (нажмите, чтобы скопировать):\n<code>{html.escape(CLAUDE_ASK)}</code>"
         params["parse_mode"] = "HTML"
-        params["reply_markup"] = {"inline_keyboard": [[{"text": "💬 Позвать Клода",
-                                                        "url": url.replace("{text}", urllib.parse.quote(ask))}]]}
+        params["reply_markup"] = {"inline_keyboard": button}
     telegram.call("sendMessage", params)
 
 @app.post("/telegram/token", dependencies=[Depends(check)])
@@ -1021,7 +1034,8 @@ def _tg_worker(job_id: str) -> None:
         clip = _tg_preview(info["job"])
         caption = f"{_label(info)}\n{job_id} · первая минута"
         telegram.send_video(clip, caption, [[{"text": "✅ Одобряю", "callback_data": f"ok:{job_id}"},
-                                             {"text": "✏️ Поправить", "callback_data": f"fix:{job_id}"}]])
+                                             {"text": "✏️ Поправить", "callback_data": f"fix:{job_id}"}]]
+                            + _claude_button())
         tg.update(status="отправлено", time=time.time())
         if not info.get("approval"):
             info["approval"] = {"status": "ждёт", "time": time.time(), "comments": []}
