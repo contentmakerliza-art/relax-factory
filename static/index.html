@@ -108,6 +108,7 @@
   <div class="card"><h2 style="margin:0 0 6px;font-size:18px">Очередь роликов на YouTube</h2>
     <div class="muted">Одобренный тестовый рендер + тексты, обложка и время. Сервер сам делает длинное видео примерно за сутки до выхода, проверяет длину, отправляет через Upload-Post и удаляет длинный файл, когда YouTube его принял.</div>
     <div id="q_list" class="muted" style="margin-top:8px">Пока пусто</div>
+    <button type="button" id="q_confirm" style="display:none" onclick="qConfirm()">Подтвердить черновики</button>
     <button type="button" onclick="qOpen(null)">Добавить ролик</button>
     <div class="muted" style="margin-top:8px">Новости очереди приходят в Telegram-бот. Сводка каждый день в <input type="time" id="q_digest" style="width:auto;display:inline-block;padding:2px 6px" onchange="qDigest()"> МСК (пусто = не присылать)</div>
   </div>
@@ -701,6 +702,8 @@ async function qLoad() {
   const alert = document.getElementById('q_alert');
   alert.style.display = bad.length ? '' : 'none';
   alert.innerHTML = bad.map(x => `Очередь роликов: «${esc(x.title)}» (${esc(x.publish_at.replace('T', ' '))}): ${esc(x.error)}`).join('<br>');
+  const drafts = qItems.filter(x => x.status === 'черновик').length, qc = document.getElementById('q_confirm');
+  qc.style.display = drafts ? '' : 'none'; qc.textContent = `Подтвердить черновики (${drafts})`;
   document.getElementById('q_list').innerHTML = qItems.length ? qItems.map(x => {
     const st = x.status === 'на YouTube' ? 'st-готово' : x.status === 'ошибка' ? 'st-ошибка' : '';
     const bar = x.status === 'рендер' ? `<div class="bar"><i style="width:${Math.round((x.progress || 0) * 100)}%"></i></div><div class="muted">${esc(x.step || 'ждёт своей очереди')}</div>` : '';
@@ -738,6 +741,11 @@ async function qSave() {
   const r = await fetch(qEdit ? `queue/${qEdit}` : 'queue', {method:'POST', body:form});
   if (!r.ok) { m.textContent = 'Ошибка: ' + ((await r.json()).detail || r.status); return; }
   document.getElementById('q_dlg').close(); qText = ''; qLoad();
+}
+async function qConfirm() {
+  const r = await fetch('queue/confirm', {method:'POST'});
+  if (!r.ok) alert('Ошибка: ' + ((await r.json()).detail || r.status));
+  qText = ''; qLoad();
 }
 async function qAct(id, act) {
   if (act === 'delete' && !sure('Убрать ролик из очереди? Длинное видео удалится, тестовый рендер останется.')) return;

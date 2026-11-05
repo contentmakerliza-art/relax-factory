@@ -1153,6 +1153,12 @@ def _tg_handle(u: dict, st: dict) -> None:
     if cb:
         telegram.call("answerCallbackQuery", {"callback_query_id": cb["id"]})
         act, _, job_id = (cb.get("data") or "").partition(":")
+        if act == "qc":
+            with qlock:
+                n = _q_confirm()
+            telegram.send_text(f"Подтверждено: {_q_count(n)} ✅ Очередь сама сделает и отправит их." if n
+                               else "Черновиков уже нет: всё подтверждено.")
+            return
         if act == "qr":
             with qlock:
                 it = next((x for x in queue_items if x["id"] == job_id), None)
@@ -1674,19 +1680,21 @@ def _q_label(it: dict) -> str:
     return f"{test}«{it['title']}» ({when.day}.{when.month:02d} в {when:%H:%M} МСК) → {where}"
 
 
-def _q_say(text: str, retry: str = "") -> None:
-    q_outbox.append((text, retry))
+def _q_say(text: str, retry: str = "", buttons: list | None = None) -> None:
+    if retry:
+        buttons = [[{"text": "🔁 Повторить", "callback_data": f"qr:{retry}"}]]
+    q_outbox.append((text, buttons))
 
 
 def _q_flush() -> None:
     """Queue news to the Telegram bot's chat; dropped when no bot is set up."""
     while q_outbox:
-        text, retry = q_outbox.pop(0)
+        text, buttons = q_outbox.pop(0)
         if not telegram.state().get("chat_id"):
             continue
         params = {"chat_id": telegram.state()["chat_id"], "text": text}
-        if retry:
-            params["reply_markup"] = {"inline_keyboard": [[{"text": "🔁 Повторить", "callback_data": f"qr:{retry}"}]]}
+        if buttons:
+            params["reply_markup"] = {"inline_keyboard": buttons}
         try:
             telegram.call("sendMessage", params)
         except Exception as e:  # the network: the page still shows everything
@@ -1717,6 +1725,8 @@ def _q_digest() -> None:
     text = f"📋 В очереди: {_q_count(len(left))}, ближайший — {_q_label(left[0])}, {left[0]['status']}."
     if bad := sum(it["status"] == "ошибка" for it in left):
         text += f" С ошибкой: {bad}."
+    if drafts := sum(it["status"] == "черновик" for it in left):
+        text += f" Не подтверждено черновиков: {drafts}."
     _q_say(text)
 
 
@@ -1851,18 +1861,21 @@ async def queue_add(
     render_now: bool = Form(False),
     private_only: bool = Form(False),
     ready: bool = Form(False),
+    draft: bool = Form(False),
 ):
-    """ready: `source` is a finished long video, sent as it is (no new render),
+    """draft: the item is only a draft (status «черновик»): nothing is rendered
+    or sent until a person confirms it in the app or in the Telegram bot.
+    ready: `source` is a finished long video, sent as it is (no new render),
     about a day before publish_at; for videos the queue cannot build, such as
     breathing with a black screen."""
     raw = await _q_upload(cover_file)
     return await run_in_threadpool(_q_new, source, request.url.netloc, title, description, tags, publish_at,
-                                   user, cover_url, raw, synthetic, hours, bitrate, render_now, private_only, ready)
+                                   user, cover_url, raw, synthetic, hours, bitrate, render_now, private_only, ready, draft)
 
 
 def _q_new(source: str, host: str, title: str, description: str, tags: str, publish_at: str, user: str,
            cover_url: str, raw: bytes | None, synthetic: bool, hours: float, bitrate: int,
-           render_now: bool, private_only: bool, ready: bool = False) -> dict:
+           render_now: bool, private_only: bool, ready: bool = False, draft: bool = False) -> dict:
     source = source.strip()
     if ready:
         info = jobs.get(source)
@@ -1877,7 +1890,7 @@ def _q_new(source: str, host: str, title: str, description: str, tags: str, publ
     if not 0 < hours <= 12 or not 2 <= bitrate <= 15:
         raise HTTPException(400, "Длина от 0 до 12 часов, битрейт от 2 до 15 Мбит/с")
     it = {"id": uuid.uuid4().hex[:8], "source": source, "hours": hours, "bitrate": bitrate,
-          "status": "ждёт", "error": "", "note": "", "job": "", "created": time.time(),
+          "status": "черновик" if draft else "ждёт", "error": "", "note": "", "job": "", "created": time.time(),
           "host": host, "render_now": render_now, "private_only": private_only, "ready": ready}
     _q_fields(it, title, description, tags, publish_at, user, synthetic)
     it["channel"] = _q_channel(it["user"])
@@ -1889,8 +1902,11 @@ def _q_new(source: str, host: str, title: str, description: str, tags: str, publ
 # the queue loop may hold the lock while it talks to Upload-Post: the async
 # endpoints take it in the thread pool, never in the event loop
 def _q_append(it: dict) -> dict:
+    global q_draft_news
     with qlock:
         queue_items.append(it)
+        if it["status"] == "черновик":
+            q_draft_news = True  # the loop sends one message for a batch of drafts
         _q_save()
         return _q_public(it)
 
@@ -1902,6 +1918,45 @@ async def _q_upload(f: UploadFile | None) -> bytes | None:
     if len(raw) > 20 * 1024 * 1024:
         raise HTTPException(400, "Обложка больше 20 МБ")
     return raw
+
+
+q_draft_news = False
+
+
+def _q_drafts() -> list[dict]:
+    return sorted((it for it in queue_items if it["status"] == "черновик"), key=lambda it: it["publish_at"])
+
+
+def _q_confirm() -> int:
+    """Drafts → ждёт; the caller holds qlock."""
+    drafts = _q_drafts()
+    for it in drafts:
+        it["status"] = "ждёт"
+    if drafts:
+        _q_save()
+    return len(drafts)
+
+
+def _q_draft_news() -> None:
+    global q_draft_news
+    if not q_draft_news:
+        return
+    q_draft_news = False
+    drafts = _q_drafts()
+    if not drafts:
+        return
+    lines = "\n".join("• " + _q_label(it) for it in drafts[:15])
+    more = f"\n…и ещё {len(drafts) - 15}" if len(drafts) > 15 else ""
+    _q_say(f"📝 Черновики в очереди: {_q_count(len(drafts))}. Пока вы не подтвердите, они не рендерятся "
+           f"и не отправляются.\n{lines}{more}",
+           buttons=[[{"text": f"✅ Подтвердить ({len(drafts)})", "callback_data": "qc:all"}]])
+
+
+@app.post("/queue/confirm", dependencies=[Depends(check)])
+def queue_confirm():
+    """Her click: all drafts go into the queue for real."""
+    with qlock:
+        return {"confirmed": _q_confirm()}
 
 
 @app.get("/queue/digest", dependencies=[Depends(check)])
@@ -2221,6 +2276,7 @@ def _queue_loop() -> None:
                         _q_step(it)
                 _q_next()
                 _q_digest()
+                _q_draft_news()
                 _q_save()
             _q_flush()
         except Exception as e:  # never let the loop die; shows on the page
