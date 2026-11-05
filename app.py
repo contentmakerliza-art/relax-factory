@@ -1513,6 +1513,7 @@ def uploadpost_send(
     publish_at: str = Form(""),
     thumb: int = Form(0),
     synthetic: bool = Form(False),
+    cover_url: str = Form(""),
 ):
     """Upload-Post downloads the video by a link that opens without the
     password; the link closes when it reports the result."""
@@ -1538,6 +1539,9 @@ def uploadpost_send(
         raise HTTPException(400, "Неизвестный доступ")
     youtube_at = _publish_at(publish_at) if publish_at else ""  # at least 30 minutes ahead
     thumb_name = f"preview_{thumb}.jpg" if 1 <= thumb <= len(info["job"].previews) else ""
+    if cover_url.strip():  # a cover of its own, e.g. a file on Google Drive
+        _cover_jpg(info["job"].output.parent / "cover.jpg", None, cover_url.strip())
+        thumb_name = "cover.jpg"
     try:
         _send_uploadpost(job_id, request.url.netloc, user, title, description,
                          [t.strip() for t in tags.split(",") if t.strip()], privacy, youtube_at,
@@ -1748,10 +1752,13 @@ def _q_source(job_id: str) -> Path:
 
 
 def _q_cover(item_id: str, raw: bytes | None, url: str) -> None:
+    _cover_jpg(QDIR / item_id / "cover.jpg", raw, url)
+
+
+def _cover_jpg(out: Path, raw: bytes | None, url: str) -> None:
     """The cover as a JPEG under 2 MB (Upload-Post and YouTube limit)."""
-    folder = QDIR / item_id
-    folder.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(dir=QDIR) as tmp:
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=out.parent) as tmp:
         if raw is not None:
             src = Path(tmp) / "cover_in"
             src.write_bytes(raw)
@@ -1760,7 +1767,6 @@ def _q_cover(item_id: str, raw: bytes | None, url: str) -> None:
                 src = fetch_folder(url, Path(tmp) / "in", IMAGE_EXTS)[0]
             except RuntimeError as e:
                 raise HTTPException(400, f"Обложка: {e}")
-        out = folder / "cover.jpg"
         for q in (2, 4, 7, 12):
             r = subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(src), "-frames:v", "1",
                                 "-vf", "scale='min(1920,iw)':-2", "-q:v", str(q), str(out)],
@@ -1844,22 +1850,35 @@ async def queue_add(
     bitrate: int = Form(4),
     render_now: bool = Form(False),
     private_only: bool = Form(False),
+    ready: bool = Form(False),
 ):
+    """ready: `source` is a finished long video, sent as it is (no new render),
+    about a day before publish_at; for videos the queue cannot build, such as
+    breathing with a black screen."""
     raw = await _q_upload(cover_file)
     return await run_in_threadpool(_q_new, source, request.url.netloc, title, description, tags, publish_at,
-                                   user, cover_url, raw, synthetic, hours, bitrate, render_now, private_only)
+                                   user, cover_url, raw, synthetic, hours, bitrate, render_now, private_only, ready)
 
 
 def _q_new(source: str, host: str, title: str, description: str, tags: str, publish_at: str, user: str,
            cover_url: str, raw: bytes | None, synthetic: bool, hours: float, bitrate: int,
-           render_now: bool, private_only: bool) -> dict:
+           render_now: bool, private_only: bool, ready: bool = False) -> dict:
     source = source.strip()
-    _q_source(source)
+    if ready:
+        info = jobs.get(source)
+        if not info or info["status"] != "готово" or not info["job"].output.exists():
+            raise HTTPException(400, f"Готового видео {source} нет на сервере")
+        with qlock:
+            if any(it.get("ready") and it["source"] == source and it["status"] != "ошибка" for it in queue_items):
+                raise HTTPException(400, f"Видео {source} уже стоит в очереди")
+        hours = probe_duration(info["job"].output) / 3600
+    else:
+        _q_source(source)
     if not 0 < hours <= 12 or not 2 <= bitrate <= 15:
         raise HTTPException(400, "Длина от 0 до 12 часов, битрейт от 2 до 15 Мбит/с")
     it = {"id": uuid.uuid4().hex[:8], "source": source, "hours": hours, "bitrate": bitrate,
           "status": "ждёт", "error": "", "note": "", "job": "", "created": time.time(),
-          "host": host, "render_now": render_now, "private_only": private_only}
+          "host": host, "render_now": render_now, "private_only": private_only, "ready": ready}
     _q_fields(it, title, description, tags, publish_at, user, synthetic)
     it["channel"] = _q_channel(it["user"])
     if raw is not None or cover_url.strip():  # without a cover YouTube picks a frame itself
@@ -2146,6 +2165,8 @@ def _q_files() -> int:
     """Long videos of the queue now on the server."""
     n = 0
     for it in queue_items:
+        if it.get("ready"):
+            continue  # its file was there before the queue
         info = jobs.get(it.get("job") or "")
         if it["status"] in Q_FILES or (info and info["job"].output.exists()):
             n += 1
@@ -2156,10 +2177,20 @@ def _q_next() -> None:
     """Starts the next long render: one at a time, a day ahead (or at once
     when the item asks), at most two long files on the server, and only when
     the disk has room."""
+    now = datetime.now(MSK)
+    for it in queue_items:  # finished videos: no render, sent about a day ahead
+        if it["status"] == "ждёт" and it.get("ready"):
+            when = _q_when(it["publish_at"])
+            if (when - now).total_seconds() <= Q_LEAD or it.get("render_now"):
+                if it["source"] not in jobs:
+                    _q_fail(it, f"Видео {it['source']} больше нет на сервере")
+                else:
+                    it.update(job=it["source"], status="проверка")
+                    _q_say(f"📦 Готовое видео {_q_label(it)} уходит в Upload-Post.")
     if any(it["status"] == "рендер" for it in queue_items) or _q_files() >= Q_MAX_FILES:
         return
-    now = datetime.now(MSK)
-    waiting = sorted((it for it in queue_items if it["status"] == "ждёт"), key=lambda it: it["publish_at"])
+    waiting = sorted((it for it in queue_items if it["status"] == "ждёт" and not it.get("ready")),
+                     key=lambda it: it["publish_at"])
     for it in waiting:
         when = _q_when(it["publish_at"])
         if when < now + timedelta(minutes=40):
