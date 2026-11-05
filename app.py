@@ -42,15 +42,29 @@ DATA.mkdir(parents=True, exist_ok=True)
 (DATA / "busy").unlink(missing_ok=True)  # left over from a restart mid-render
 
 app = FastAPI(title="Релакс-фабрика")
-security = HTTPBasic()
+security = HTTPBasic(auto_error=False)
+API_TOKEN = youtube.SECRETS / "api-token"  # for Claude in the cloud: approvals and the queue only
 
 jobs: dict[str, dict] = {}
 work: queue.Queue[str] = queue.Queue()
 
 
-def check(creds: HTTPBasicCredentials = Depends(security)) -> None:
-    if not PASSWORD or not secrets.compare_digest(creds.password, PASSWORD):
+def check(creds: HTTPBasicCredentials | None = Depends(security)) -> None:
+    if not PASSWORD or not creds or not secrets.compare_digest(creds.password, PASSWORD):
         raise HTTPException(401, headers={"WWW-Authenticate": "Basic"})
+
+
+def check_api(request: Request, creds: HTTPBasicCredentials | None = Depends(security)) -> None:
+    """The password, or the cloud token in X-Relax-Token: the token opens only
+    the routes that use this check (approvals, plans, the video queue)."""
+    given = request.headers.get("x-relax-token", "")
+    try:
+        token = API_TOKEN.read_text().strip()
+    except OSError:
+        token = ""
+    if given and token and secrets.compare_digest(given, token):
+        return
+    check(creds)
 
 
 def worker() -> None:
@@ -946,6 +960,28 @@ def _keep_notes(job_id: str, info: dict) -> None:
     _write_note(job_id, {"label": _label(info), "approval": ap, "deleted": time.time()})
 
 
+@app.get("/api-token", dependencies=[Depends(check)])
+def api_token_state():
+    return {"set": API_TOKEN.exists()}
+
+
+@app.post("/api-token", dependencies=[Depends(check)])
+def api_token_new():
+    """A new token for Claude in the cloud (the old one stops working). Shown
+    once: it goes into the cloud environment, never into a chat."""
+    token = secrets.token_urlsafe(32)
+    API_TOKEN.parent.mkdir(parents=True, exist_ok=True)
+    API_TOKEN.write_text(token)
+    API_TOKEN.chmod(0o600)
+    return {"token": token}
+
+
+@app.delete("/api-token", dependencies=[Depends(check)])
+def api_token_off():
+    API_TOKEN.unlink(missing_ok=True)
+    return {"ok": True}
+
+
 @app.get("/telegram", dependencies=[Depends(check)])
 def telegram_state():
     st = telegram.state()
@@ -1099,6 +1135,7 @@ def _approve(job_id: str, via: str) -> None:
     info["approval"] = ap
     save_job(job_id, info)
     threading.Thread(target=_save_sources, args=(job_id,), daemon=True).start()
+    threading.Thread(target=_plan_after_approve, args=(job_id,), daemon=True).start()
 
 
 def _tg_handle(u: dict, st: dict) -> None:
@@ -1262,7 +1299,7 @@ def _stt_loop() -> None:
 threading.Thread(target=_stt_loop, daemon=True).start()
 
 
-@app.get("/approvals", dependencies=[Depends(check)])
+@app.get("/approvals", dependencies=[Depends(check_api)])
 def approvals():
     """Tests sent for approval: status ждёт / одобрено / правка, the comments
     (voice notes download from /jobs/{id}/comment/{name}; their text appears in
@@ -1272,6 +1309,7 @@ def approvals():
         ap = info.get("approval")
         if ap:
             rows.append({"job_id": job_id, "label": _label(info), "status": ap.get("status"),
+                         "plan": (DATA / job_id / "plan.json").exists(),
                          "time": ap.get("time"), "comments": ap.get("comments", []),
                          "sources": ap.get("sources", ""), "drive": ap.get("drive", ""),
                          "error": ap.get("sources_error", "")})
@@ -1284,6 +1322,108 @@ def approvals():
         rows.append({"job_id": job_id, "label": note.get("label", ""), "status": ap.get("status"),
                      "time": ap.get("time"), "comments": ap.get("comments", []), "deleted": True})
     return rows
+
+
+# A plan = the texts for the queue, written before approval: «Одобряю» in the
+# bot then puts the test into the queue on its own, on the profile's next free
+# day, so nobody has to be at a computer.
+
+def _plan_file(job_id: str) -> Path:
+    return _job_dir(job_id) / "plan.json"
+
+
+@app.post("/jobs/{job_id}/plan", dependencies=[Depends(check_api)])
+def plan_set(
+    job_id: str,
+    request: Request,
+    title: str = Form(...),
+    description: str = Form(""),
+    tags: str = Form(""),
+    user: str = Form(...),
+    cover_url: str = Form(""),
+    synthetic: bool = Form(True),
+    private_only: bool = Form(False),
+    time_msk: str = Form("22:00"),
+    hours: float = Form(10.0),
+    bitrate: int = Form(4),
+):
+    if job_id not in jobs:
+        raise HTTPException(404, "Нет такой пробы")
+    if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", time_msk.strip()):
+        raise HTTPException(400, "Время выхода: ЧЧ:ММ по Москве")
+    if not 0 < hours <= 12 or not 2 <= bitrate <= 15:
+        raise HTTPException(400, "Длина от 0 до 12 часов, битрейт от 2 до 15 Мбит/с")
+    probe = {}
+    _q_fields(probe, title, description, tags, (datetime.now(MSK) + timedelta(days=2)).strftime("%Y-%m-%d"),
+              user, synthetic)  # the same checks as the queue, the profile list included
+    plan = {"title": title, "description": description, "tags": tags, "user": user.strip(),
+            "cover_url": cover_url.strip(), "synthetic": synthetic, "private_only": private_only,
+            "time_msk": time_msk.strip(), "hours": hours, "bitrate": bitrate, "host": request.url.netloc,
+            "time": time.time()}
+    _plan_file(job_id).write_text(json.dumps(plan, ensure_ascii=False), encoding="utf-8")
+    if _approved(jobs[job_id]):  # approved already: straight into the queue
+        return {"plan": plan, "queued": _plan_to_queue(job_id)}
+    return {"plan": plan}
+
+
+@app.get("/jobs/{job_id}/plan", dependencies=[Depends(check_api)])
+def plan_get(job_id: str):
+    f = _plan_file(job_id)
+    return json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
+
+
+@app.delete("/jobs/{job_id}/plan", dependencies=[Depends(check_api)])
+def plan_delete(job_id: str):
+    _plan_file(job_id).unlink(missing_ok=True)
+    return {"ok": True}
+
+
+def _next_free(user: str, at: str) -> str:
+    """The first day from today whose time is still 6 h or more away and that
+    has no video of this profile yet."""
+    with qlock:
+        taken = {it["publish_at"][:10] for it in queue_items if it.get("user") == user}
+    hh, mm = map(int, at.split(":"))
+    day = datetime.now(MSK).replace(hour=hh, minute=mm, second=0, microsecond=0)
+    while day < datetime.now(MSK) + timedelta(hours=6) or day.strftime("%Y-%m-%d") in taken:
+        day += timedelta(days=1)
+    return day.strftime("%Y-%m-%dT%H:%M")
+
+
+def _plan_to_queue(job_id: str) -> dict | None:
+    """Puts an approved test with a plan into the queue; None without a plan or
+    when it is queued already."""
+    try:
+        f = _plan_file(job_id)
+    except HTTPException:
+        return None
+    if not f.exists():
+        return None
+    with qlock:
+        if any(it["source"] == job_id for it in queue_items):
+            return None
+    p = json.loads(f.read_text(encoding="utf-8"))
+    return _q_new(job_id, p["host"], p["title"], p["description"], p["tags"], _next_free(p["user"], p["time_msk"]),
+                  p["user"], p["cover_url"], None, p["synthetic"], p["hours"], p["bitrate"], False, p["private_only"])
+
+
+def _plan_after_approve(job_id: str) -> None:
+    """In the background after «Одобряю»: the queue, then a word in the bot."""
+    try:
+        it = _plan_to_queue(job_id)
+    except HTTPException as e:
+        text = f"Не получилось поставить «{_label(jobs[job_id])}» в очередь: {e.detail}"
+    except Exception as e:
+        text = f"Не получилось поставить «{_label(jobs[job_id])}» в очередь: {str(e)[:300]}"
+    else:
+        if not it:
+            return
+        text = f"🗓 Поставила в очередь: {_q_label(it)}"
+    if telegram.state().get("chat_id"):
+        try:
+            telegram.send_text(text)
+        except Exception as e:
+            print("plan telegram:", e, flush=True)
 
 
 @app.post("/jobs/{job_id}/approve", dependencies=[Depends(check)])
@@ -1680,7 +1820,7 @@ def _q_public(it: dict) -> dict:
     return row
 
 
-@app.get("/queue", dependencies=[Depends(check)])
+@app.get("/queue", dependencies=[Depends(check_api)])
 def queue_list():
     """Statuses: ждёт · рендер · проверка · отправлен (Upload-Post загружает) ·
     на YouTube · ошибка (текст в error)."""
@@ -1688,7 +1828,7 @@ def queue_list():
         return sorted((_q_public(it) for it in queue_items), key=lambda r: r["publish_at"])
 
 
-@app.post("/queue", dependencies=[Depends(check)])
+@app.post("/queue", dependencies=[Depends(check_api)])
 async def queue_add(
     request: Request,
     source: str = Form(...),
@@ -1705,20 +1845,26 @@ async def queue_add(
     render_now: bool = Form(False),
     private_only: bool = Form(False),
 ):
+    raw = await _q_upload(cover_file)
+    return await run_in_threadpool(_q_new, source, request.url.netloc, title, description, tags, publish_at,
+                                   user, cover_url, raw, synthetic, hours, bitrate, render_now, private_only)
+
+
+def _q_new(source: str, host: str, title: str, description: str, tags: str, publish_at: str, user: str,
+           cover_url: str, raw: bytes | None, synthetic: bool, hours: float, bitrate: int,
+           render_now: bool, private_only: bool) -> dict:
     source = source.strip()
     _q_source(source)
     if not 0 < hours <= 12 or not 2 <= bitrate <= 15:
         raise HTTPException(400, "Длина от 0 до 12 часов, битрейт от 2 до 15 Мбит/с")
     it = {"id": uuid.uuid4().hex[:8], "source": source, "hours": hours, "bitrate": bitrate,
           "status": "ждёт", "error": "", "note": "", "job": "", "created": time.time(),
-          "host": request.url.netloc, "render_now": render_now,
-          "private_only": private_only}
+          "host": host, "render_now": render_now, "private_only": private_only}
     _q_fields(it, title, description, tags, publish_at, user, synthetic)
-    it["channel"] = await run_in_threadpool(_q_channel, it["user"])
-    raw = await _q_upload(cover_file)
+    it["channel"] = _q_channel(it["user"])
     if raw is not None or cover_url.strip():  # without a cover YouTube picks a frame itself
-        await run_in_threadpool(_q_cover, it["id"], raw, cover_url.strip())
-    return await run_in_threadpool(_q_append, it)
+        _q_cover(it["id"], raw, cover_url.strip())
+    return _q_append(it)
 
 
 # the queue loop may hold the lock while it talks to Upload-Post: the async

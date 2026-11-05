@@ -123,6 +123,14 @@
     <button type="button" onclick="tgClaude()">Сохранить ссылку</button>
   </div>
 
+  <div class="card"><h2 style="margin:0 0 6px;font-size:18px">Доступ для облачного Клода</h2>
+    <div class="muted">Токен открывает только одобрения проб, их карточки для очереди и очередь роликов, без пароля приложения. Его вставляют в облачное окружение Клода как переменную RELAX_TOKEN, в чат не пишут. Новый токен отменяет старый.</div>
+    <div id="api_state" class="muted" style="margin-top:8px"></div>
+    <input type="text" id="api_token" readonly style="display:none;margin-top:6px" onclick="this.select()">
+    <button type="button" onclick="apiNew()">Создать токен</button>
+    <a href="#" onclick="apiOff();return false" style="display:inline-block;margin-top:8px">отключить токен</a>
+  </div>
+
   <div class="card"><h2 style="margin:0 0 6px;font-size:18px">Google Диск для проб</h2>
     <div class="muted">Готовую пробу можно одной ссылкой отправить на Google Диск, она откроется на телефоне без пароля. Приложение видит только свою папку «Relax Factory — пробы».</div>
     <div id="gd_state" class="muted" style="margin-top:8px"></div>
@@ -612,6 +620,23 @@ async function gdSend(id) {
   lastJobs = ''; load();
 }
 gdLoad();
+
+// ---------- Облачный Клод ----------
+async function apiLoad() {
+  const r = await fetch('api-token'); if (!r.ok) return;
+  document.getElementById('api_state').textContent = (await r.json()).set ? 'Токен создан' : 'Токена нет';
+}
+async function apiNew() {
+  if (!sure('Создать новый токен? Старый перестанет работать.')) return;
+  const r = await fetch('api-token', {method:'POST'}); if (!r.ok) return;
+  const el = document.getElementById('api_token'); el.value = (await r.json()).token; el.style.display = '';
+  document.getElementById('api_state').textContent = 'Скопируйте токен сейчас: после обновления страницы его не будет видно';
+}
+async function apiOff() {
+  if (!sure('Отключить токен?')) return;
+  await fetch('api-token', {method:'DELETE'}); document.getElementById('api_token').style.display = 'none'; apiLoad();
+}
+apiLoad();
 
 // ---------- Telegram ----------
 let tgOn = false;
