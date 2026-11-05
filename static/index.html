@@ -193,6 +193,7 @@
     <div id="q_cover_now" class="muted"></div>
     <label style="font-weight:400"><input type="checkbox" name="synthetic"> Видео создано с помощью ИИ (раскрытие для YouTube)</label>
     <label style="font-weight:400"><input type="checkbox" name="render_now"> Рендерить сразу, не ждать суток до выхода</label>
+    <label style="font-weight:400"><input type="checkbox" name="ready"> Готовое длинное видео: отправить как есть, без пересборки (номер выше = номер готового рендера)</label>
     <label style="font-weight:400"><input type="checkbox" name="private_only"> Только приватно (тест): YouTube не опубликует, дата нужна только для расписания</label>
     <p class="muted">10 часов, 4 Мбит/с, те же клипы, звук и настройки, что в тестовом рендере. Приватное, YouTube сам откроет его в указанное время. Не для детей · «Люди и блоги» · английский.</p>
     <button type="button" onclick="qSave()">Сохранить</button>
@@ -212,6 +213,7 @@
     <label>Опубликовать <span class="hint">по Москве; видео загрузится сразу приватным, YouTube сам откроет его в это время. Пусто = доступ как выбран выше</span></label><input type="datetime-local" name="publish_at">
     <label>Обложка <span class="hint">кадр из видео</span></label>
     <div class="thumbs" id="up_thumbs"></div><input type="hidden" name="thumb" value="0">
+    <input type="text" name="cover_url" placeholder="или ссылка на картинку в Google Диске" style="margin-top:6px">
     <label style="font-weight:400"><input type="checkbox" name="synthetic" value="true"> Видео создано с помощью ИИ (раскрытие для YouTube)</label>
     <button type="button" onclick="upSend()">Отправить</button>
     <button type="button" onclick="document.getElementById('up_dlg').close()" style="background:var(--line);color:var(--text);margin-top:8px">Отмена</button>
@@ -719,7 +721,7 @@ function qOpen(id) {
   if (x) {
     f.source.value = x.source; f.user.value = x.user; f.publish_at.value = x.publish_at;
     f.title.value = x.title; f.description.value = x.description; f.tags.value = x.tags.join(', ');
-    f.synthetic.checked = !!x.synthetic; f.render_now.checked = !!x.render_now; f.private_only.checked = !!x.private_only;
+    f.synthetic.checked = !!x.synthetic; f.render_now.checked = !!x.render_now; f.private_only.checked = !!x.private_only; f.ready.checked = !!x.ready;
   } else {
     try { f.user.value = localStorage.getItem('upUser') || upUser; } catch (err) { f.user.value = upUser; }
   }
@@ -731,6 +733,7 @@ async function qSave() {
   const form = new FormData(f); form.set('synthetic', f.synthetic.checked ? 'true' : 'false');
   form.set('render_now', f.render_now.checked ? 'true' : 'false');
   form.set('private_only', f.private_only.checked ? 'true' : 'false');
+  form.set('ready', f.ready.checked ? 'true' : 'false');
   m.textContent = 'Сохраняю…';
   const r = await fetch(qEdit ? `queue/${qEdit}` : 'queue', {method:'POST', body:form});
   if (!r.ok) { m.textContent = 'Ошибка: ' + ((await r.json()).detail || r.status); return; }
