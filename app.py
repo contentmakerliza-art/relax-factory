@@ -1341,7 +1341,7 @@ def plan_set(
     tags: str = Form(""),
     user: str = Form(...),
     cover_url: str = Form(""),
-    synthetic: bool = Form(True),
+    synthetic: bool = Form(False),
     private_only: bool = Form(False),
     time_msk: str = Form("22:00"),
     hours: float = Form(10.0),
@@ -1839,7 +1839,7 @@ async def queue_add(
     user: str = Form(...),
     cover_url: str = Form(""),
     cover_file: UploadFile | None = File(None),
-    synthetic: bool = Form(True),
+    synthetic: bool = Form(False),
     hours: float = Form(10.0),
     bitrate: int = Form(4),
     render_now: bool = Form(False),
@@ -1917,7 +1917,7 @@ async def queue_edit(
     user: str = Form(...),
     cover_url: str = Form(""),
     cover_file: UploadFile | None = File(None),
-    synthetic: bool = Form(True),
+    synthetic: bool = Form(False),
     render_now: bool | None = Form(None),
     private_only: bool | None = Form(None),
 ):
@@ -2125,7 +2125,7 @@ def _q_step(it: dict) -> None:
         try:
             _send_uploadpost(it["job"], it["host"], it["user"], it["title"], it["description"], it["tags"],
                              "private", youtube_at, it["publish_at"],
-                             "cover.jpg" if (out.parent / "cover.jpg").exists() else "", it.get("synthetic", True))
+                             "cover.jpg" if (out.parent / "cover.jpg").exists() else "", it.get("synthetic", False))
         except RuntimeError as e:
             _q_fail(it, f"Upload-Post: {e}")
             return
