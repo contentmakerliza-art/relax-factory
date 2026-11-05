@@ -76,6 +76,7 @@
     <label>Треки <span class="hint">MP3, можно выбрать сразу все. Можно без треков, если есть фоновый звук</span></label>
     <input type="file" name="tracks" accept="audio/*" multiple>
     <textarea name="tracks_url" rows="2" placeholder="или ссылка на Google Диск (можно несколько ссылок на mp3, по одной в строке)" style="margin-top:6px;width:100%"></textarea>
+    <input type="text" name="tracks_from_job" placeholder="или номер рендера, чьи треки взять" style="margin-top:6px">
     <label>Фоновый звук <span class="hint">вода, дождь, камин. Можно 2–5 слоёв сразу (крыша, окно, капли): каждый зациклится сам. Слой тише: допишите в имя файла -6dB. С треками идёт тихо под музыкой</span></label>
     <input type="file" name="ambient" accept="audio/*" multiple>
     <input type="url" name="ambient_url" placeholder="или ссылка на Google Диск" style="margin-top:6px">
@@ -219,7 +220,7 @@ async function call(url, opts) {
 }
 f.addEventListener('submit', async e => {
   e.preventDefault();
-  const vUrl = f.visual_url.value.trim(), tUrl = f.tracks_url.value.trim(), aUrl = f.ambient_url.value.trim() || f.ambient_from_job.value.trim(), mUrl = f.mask_url.value.trim(), oUrl = f.voice_url.value.trim(), iUrl = f.intro_url.value.trim();
+  const vUrl = f.visual_url.value.trim(), tUrl = f.tracks_url.value.trim() || f.tracks_from_job.value.trim(), aUrl = f.ambient_url.value.trim() || f.ambient_from_job.value.trim(), mUrl = f.mask_url.value.trim(), oUrl = f.voice_url.value.trim(), iUrl = f.intro_url.value.trim();
   const visual = vUrl ? [] : f.visual.files, tracks = tUrl ? [] : f.tracks.files, ambient = aUrl ? [] : f.ambient.files, mask = mUrl ? [] : f.mask.files, voice = oUrl ? [] : f.voice.files, intro = iUrl ? [] : f.intro.files;
   if (!visual.length && !vUrl && !voice.length && !oUrl) { msg.textContent = 'Выберите клипы или вставьте ссылку на Google Диск'; return; }
   if (!tracks.length && !tUrl && !ambient.length && !aUrl && !f.ambient_from_job.value.trim()) { msg.textContent = 'Выберите треки или фоновый звук (или вставьте ссылку на Google Диск)'; return; }

@@ -28,6 +28,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from starlette.concurrency import run_in_threadpool
 
+from render import drive
 from render.drive import fetch_folder
 from render.breathing import parse_script
 from render.engine import Breath, Job, RenderSettings, kit_dir, make_check_clips, probe_duration, render
@@ -35,6 +36,7 @@ from render.scripts import DEFAULT, PRESETS
 from render import gdrive, stt, telegram, uploadpost, youtube
 
 DATA = Path(os.environ.get("APP_DATA", Path(__file__).parent / "data"))
+drive.CACHE = DATA / "drive-cache"  # every Drive file once; jobs get hard links
 PASSWORD = os.environ.get("APP_PASSWORD", "")
 DATA.mkdir(parents=True, exist_ok=True)
 (DATA / "busy").unlink(missing_ok=True)  # left over from a restart mid-render
@@ -90,34 +92,33 @@ def _fetch_from_drive(info: dict, progress) -> None:
     """Download the clips and tracks from Google Drive links straight to the server."""
     job: Job = info["job"]
     folder = job.output.parent
+
+    def fetch(step: str, url: str, dst: Path, exts: set[str]) -> list[Path]:
+        progress(step, 0.0)
+        return fetch_folder(url, dst, exts, lambda n, total: progress(f"{step}: {n} из {total}", n / total))
+
     visual_url, tracks_url, pick, ambient_url, mask_url, voice_url, *more = info["drive"]
     if intro_url := (more[0] if more else ""):
-        progress("Скачиваю вступление с Google Диска", 0.0)
-        job.intro = [p for p in fetch_folder(intro_url, folder / "intro", VIDEO_EXTS)]
+        job.intro = [p for p in fetch("Скачиваю вступление с Google Диска", intro_url, folder / "intro", VIDEO_EXTS)]
     if visual_url:
-        progress("Скачиваю клипы с Google Диска", 0.0)
-        found = fetch_folder(visual_url, folder / "visual", VISUAL_EXTS)
+        found = fetch("Скачиваю клипы с Google Диска", visual_url, folder / "visual", VISUAL_EXTS)
         # a folder with clips may also hold the frames they were made from
         clips = [p for p in found if p.suffix.lower() in VIDEO_EXTS]
         job.visuals = clips or found
     if tracks_url:
-        progress("Скачиваю треки с Google Диска", 0.0)
         # several links (one per line) make an album in the order given:
         # Suno tracks from Syntx come as separate mp3 links
         job.tracks = [t for url in tracks_url.split()
-                      for t in fetch_folder(url, folder / "tracks", AUDIO_EXTS | VIDEO_EXTS)]
+                      for t in fetch("Скачиваю треки с Google Диска", url, folder / "tracks", AUDIO_EXTS | VIDEO_EXTS)]
     if pick and len(job.tracks) > pick:
         job.tracks = sorted(random.sample(job.tracks, pick))
     if ambient_url:
-        progress("Скачиваю фоновый звук с Google Диска", 0.0)
         # a sound from Syntx «Видео в аудио» often comes as an .mp4
-        job.ambient = fetch_folder(ambient_url, folder / "ambient", AUDIO_EXTS | VIDEO_EXTS)[:5]
+        job.ambient = fetch("Скачиваю фоновый звук с Google Диска", ambient_url, folder / "ambient", AUDIO_EXTS | VIDEO_EXTS)[:5]
     if voice_url:
-        progress("Скачиваю голос с Google Диска", 0.0)
-        job.voice = fetch_folder(voice_url, folder / "voice", AUDIO_EXTS)[0]
+        job.voice = fetch("Скачиваю голос с Google Диска", voice_url, folder / "voice", AUDIO_EXTS)[0]
     if mask_url:
-        progress("Скачиваю маску с Google Диска", 0.0)
-        job.mask, job.still = split_mask(fetch_folder(mask_url, folder / "mask", IMAGE_EXTS))
+        job.mask, job.still = split_mask(fetch("Скачиваю маску с Google Диска", mask_url, folder / "mask", IMAGE_EXTS))
 
 
 def split_mask(files: list[Path]) -> tuple[Path | None, Path | None]:
@@ -320,6 +321,7 @@ def start_job(
     intro_crossfade: float = Form(0.0),
     ambient_from_job: str = Form(""),
     intro_from_job: str = Form(""),
+    tracks_from_job: str = Form(""),
     breath_start: float = Form(16.0),
     breath_in: float = Form(4.0),
     breath_out: float = Form(6.0),
@@ -338,6 +340,8 @@ def start_job(
         _borrow(ambient_from_job.strip(), "ambient", folder)
     if intro_from_job.strip():
         _borrow(intro_from_job.strip(), "intro", folder)
+    if tracks_from_job.strip():
+        _borrow(tracks_from_job.strip(), "tracks", folder)
     visual_url, tracks_url, ambient_url = visual_url.strip(), tracks_url.strip(), ambient_url.strip()
     mask_url, voice_url, intro_url = mask_url.strip(), voice_url.strip(), intro_url.strip()
     intro_dir = folder / "intro"
@@ -655,9 +659,15 @@ def cleanup(days: float = Form(7.0)):
             shutil.rmtree(DATA / job_id, ignore_errors=True)
             jobs.pop(job_id)
     for folder in DATA.iterdir():
-        if folder.is_dir() and folder.name not in jobs and folder not in (QDIR, SRCDIR, NOTES, DATA / "models") and now - folder.stat().st_mtime > 86400:
+        if folder.is_dir() and folder.name not in jobs and folder not in (QDIR, SRCDIR, NOTES, drive.CACHE, DATA / "models") and now - folder.stat().st_mtime > 86400:
             freed += _size(folder)
             shutil.rmtree(folder, ignore_errors=True)
+    # Drive files no job uses any more (one link left) and not asked for a week
+    for d in drive.CACHE.iterdir() if drive.CACHE.is_dir() else []:
+        files = [f for f in d.rglob("*") if f.is_file()]
+        if all(f.stat().st_nlink == 1 and now - f.stat().st_mtime > 7 * 86400 for f in files):
+            freed += _size(d)
+            shutil.rmtree(d, ignore_errors=True)
     return {"freed_gb": round(freed / 1e9, 1), "free_gb": round(free_gb(), 1)}
 
 
