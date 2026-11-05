@@ -118,8 +118,8 @@
     <label>Токен бота <span class="hint">из @BotFather; хранится только на сервере</span></label>
     <input type="password" id="tg_token" autocomplete="off" style="width:100%;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--text);font:inherit">
     <button type="button" onclick="tgToken()">Сохранить токен</button>
-    <label>Ссылка на чат с Клодом <span class="hint">после «Одобряю» или правки бот покажет кнопку «Позвать Клода» с этой ссылкой и готовый текст «Проверь одобрение…»; {text} в ссылке заменится этим текстом. Пусто = без кнопки</span></label>
-    <input type="text" id="tg_claude" placeholder="https://claude.ai/…">
+    <label>Ссылка на чат с Клодом <span class="hint">под каждой пробой и после ответа бот покажет кнопку «Позвать Клода» с этой ссылкой (сейчас: основной чат проекта) и готовый текст «Проверь одобрения»; {text} в ссылке заменится этим текстом. Пусто = без кнопки</span></label>
+    <input type="text" id="tg_claude" placeholder="пусто = без кнопки">
     <button type="button" onclick="tgClaude()">Сохранить ссылку</button>
   </div>
 
