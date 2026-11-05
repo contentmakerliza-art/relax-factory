@@ -483,9 +483,11 @@ def _borrow(src_id: str, kind: str, folder: Path) -> None:
                 shutil.copy2(f, dst / f.name)
 
 
-@app.get("/jobs/{job_id}/sources/{kind}", dependencies=[Depends(check)])
+@app.get("/jobs/{job_id}/sources/{kind}", dependencies=[Depends(check_api)])
 def source_list(job_id: str, kind: str):
-    """Names and sizes of a job's source files (visual, tracks, ambient, mask, intro)."""
+    """Names and sizes of a job's source files (visual, tracks, ambient, mask,
+    voice, intro). The cloud token may read the list too: it tells which
+    approved video is which before it goes into the queue."""
     src = _source_dir(job_id, kind)
     if not src:
         return []
@@ -1318,7 +1320,8 @@ def approvals():
                          "plan": (DATA / job_id / "plan.json").exists(),
                          "time": ap.get("time"), "comments": ap.get("comments", []),
                          "sources": ap.get("sources", ""), "drive": ap.get("drive", ""),
-                         "error": ap.get("sources_error", "")})
+                         "error": ap.get("sources_error", ""),
+                         "cover": (DATA / job_id / "cover.jpg").exists()})
     for f in sorted(NOTES.glob("*/approval.json"), reverse=True) if NOTES.is_dir() else []:
         job_id = f.parent.name
         note = _read_note(job_id)
