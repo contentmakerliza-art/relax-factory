@@ -509,7 +509,13 @@ def source_file(job_id: str, kind: str, name: str):
 def voice_file(job_id: str, name: str):
     """A job's voice recording for the cloud token too: Claude checks how the
     app cut it into phrases (the voice holds no secrets)."""
-    return source_file(job_id, "voice", name)
+    if not re.fullmatch(r"\d{8}-\d{6}-[0-9a-f]{4}", job_id):
+        raise HTTPException(404)
+    for d in (DATA / job_id / "voice", SRCDIR / job_id / "voice"):  # voice is not a borrowed kind
+        f = d / Path(name).name
+        if f.is_file():
+            return FileResponse(f, filename=f.name)
+    raise HTTPException(404)
 
 
 @app.get("/jobs/{job_id}/ambient/{name}", dependencies=[Depends(check)])
