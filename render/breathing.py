@@ -315,8 +315,40 @@ def _tokens(text: str) -> list[str]:
     return re.findall(r"[a-z0-9]+", text.lower().replace("\u2019", "'").replace("'", ""))
 
 
+def _levels(voice: Path) -> list[float]:
+    """Loudness of every 20 ms of the file, dB."""
+    import numpy as np
+
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(voice), "-ac", "1", "-ar", "8000",
+                          "-f", "s16le", "-"], capture_output=True, check=True).stdout
+    x = np.frombuffer(raw, np.int16).astype(np.float32) / 32768.0
+    n = len(x) // 160
+    rms = np.sqrt((x[: n * 160].reshape(n, 160) ** 2).mean(axis=1)) + 1e-6
+    return list(20 * np.log10(rms))
+
+
+def _quiet_run(levels: list[float], lo: float, hi: float) -> tuple[float, float] | None:
+    """The longest stretch between lo and hi seconds that stays within 6 dB of
+    its quietest moment: a breath between two words that never falls silent."""
+    a, b = max(0, int(lo / 0.02)), min(len(levels), int(hi / 0.02) + 1)
+    if b - a < 2:
+        return None
+    floor = min(levels[a:b]) + 6
+    best, start = None, None
+    for i in range(a, b + 1):
+        quiet = i < b and levels[i] <= floor
+        if quiet and start is None:
+            start = i
+        if not quiet and start is not None:
+            if best is None or i - start > best[1] - best[0]:
+                best = (start, i)
+            start = None
+    return (best[0] * 0.02, best[1] * 0.02) if best else None
+
+
 def _align(words: list[tuple[str, float, float]], lines: list[str],
-           talk: list[tuple[float, float]]) -> list[tuple[float, float]] | None:
+           talk: list[tuple[float, float]], levels: list[float] | None = None
+           ) -> list[tuple[float, float]] | None:
     """One (start, end) per script line from the recognised words: the
     script's words are matched to the heard ones in order, each line runs
     from its first heard word to its last, and the edges snap to the nearest
@@ -370,18 +402,37 @@ def _align(words: list[tuple[str, float, float]], lines: list[str],
     # silence). A line then runs from its first sound to its last.
     speech = [c for c in talk if c[1] - c[0] >= 0.12] or talk
     gaps = [(speech[g - 1][1], speech[g][0]) for g in range(1, len(speech))]
-    bounds, last = [], speech[0][0]
+    bounds, last, soft = [], speech[0][0], []
     for i in range(len(cuts) - 1):
         lo = min(cuts[i][1], cuts[i + 1][0]) - 0.6
         hi = max(cuts[i][1], cuts[i + 1][0]) + 0.6
         near = [g for g in gaps if g[0] > last and lo <= (g[0] + g[1]) / 2 <= hi]
-        if not near:
-            return None  # no pause where the line should change: fall back to pauses alone
-        g = max(near, key=lambda x: x[1] - x[0])
+        soft.append(not near)
+        if near:
+            g = max(near, key=lambda x: x[1] - x[0])
+        else:  # no silence there («clouds, in»): the quietest stretch between the two words
+            w0, w1 = sorted((cuts[i][1], cuts[i + 1][0]))
+            g = _quiet_run(levels, max(w0 - 0.2, last), w1 + 0.2) if levels else None
+            if not g:
+                return None  # fall back to pauses alone
         bounds.append(g)
         last = g[1]
     edges = [speech[0][0]] + [x for g in bounds for x in g] + [speech[-1][1]]
     out = list(zip(edges[0::2], edges[1::2]))
+    # a breath before the first word stays out: the line starts with the
+    # stretch of sound that holds its first heard word (its end is kept: a
+    # drawn-out «out…» lasts longer than whisper says)
+    for i, (a, e) in enumerate(out):
+        if not spans[i]:
+            continue
+        inside = [(max(s, a), min(x, e)) for s, x in speech if x > a and s < e]
+        fa, fe = spans[i][0], spans[i][1]
+        first = next((c for c in inside if c[1] > fa + 0.05 and c[0] < fe), None)
+        start = first[0] if first else a
+        if i and soft[i - 1]:  # cut in a breath, not a pause: start near the heard word
+            start = max(start, fa - 0.15)
+        if start < e:
+            out[i] = (start, e)
     padded = []
     for i, (a, e) in enumerate(out):
         nxt = out[i + 1][0] if i + 1 < len(out) else e + 0.15
@@ -403,7 +454,7 @@ def _phrases_by_words(voice: Path, lines: list[str]) -> tuple[list[tuple[float, 
     except Exception:  # no model, no network for the first download, …
         return None, []
     try:
-        return _align(words, lines, _chunks(voice)), words
+        return _align(words, lines, _chunks(voice), _levels(voice)), words
     except Exception:
         return None, words
 
