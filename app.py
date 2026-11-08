@@ -2038,6 +2038,33 @@ async def queue_cover(item_id: str, cover_url: str = Form(""),
         return _q_public(_q_item(item_id))
 
 
+@app.post("/queue/{item_id}/replace", dependencies=[Depends(check_api)])
+def queue_replace(item_id: str, source: str = Form(...), title: str = Form(...),
+                  description: str = Form(""), tags: str = Form("")):
+    """Put another video on the same day: the cloud token may swap the test
+    render and the texts of an item that still waits, and only for a test
+    approved in the bot. Date, profile and the AI mark stay; an old cover is
+    dropped, it showed the old scene."""
+    source = source.strip()
+    it = _q_copy(item_id)
+    if it["status"] != "ждёт" or it.get("job"):
+        raise HTTPException(400, "Заменить можно только ролик, который ещё ждёт")
+    _q_source(source)
+    if not _approved(jobs.get(source) or {}):
+        raise HTTPException(400, f"Рендер {source} не одобрен в боте")
+    _q_fields(it, title, description, tags, it["publish_at"], it["user"], it.get("synthetic", False))
+    it["source"] = source
+    with qlock:
+        cur = _q_item(item_id)
+        if cur["status"] != "ждёт" or cur.get("job"):
+            raise HTTPException(400, "Заменить можно только ролик, который ещё ждёт")
+        for k in ("source", "title", "description", "tags"):
+            cur[k] = it[k]
+        (QDIR / item_id / "cover.jpg").unlink(missing_ok=True)
+        _q_save()
+        return _q_public(cur)
+
+
 def _q_copy(item_id: str) -> dict:
     with qlock:
         return dict(_q_item(item_id))
