@@ -505,6 +505,13 @@ def source_file(job_id: str, kind: str, name: str):
     return FileResponse(f, filename=f.name)
 
 
+@app.get("/jobs/{job_id}/voice-file/{name}", dependencies=[Depends(check_api)])
+def voice_file(job_id: str, name: str):
+    """A job's voice recording for the cloud token too: Claude checks how the
+    app cut it into phrases (the voice holds no secrets)."""
+    return source_file(job_id, "voice", name)
+
+
 @app.get("/jobs/{job_id}/ambient/{name}", dependencies=[Depends(check)])
 def ambient_file(job_id: str, name: str):
     return source_file(job_id, "ambient", name)
