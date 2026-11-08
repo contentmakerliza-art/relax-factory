@@ -2058,17 +2058,24 @@ async def queue_cover(item_id: str, cover_url: str = Form(""),
 
 @app.post("/queue/{item_id}/replace", dependencies=[Depends(check_api)])
 def queue_replace(item_id: str, source: str = Form(...), title: str = Form(...),
-                  description: str = Form(""), tags: str = Form("")):
+                  description: str = Form(""), tags: str = Form(""), keep_cover: bool = Form(False)):
     """Put another video on the same day: the cloud token may swap the test
-    render and the texts of an item that still waits, and only for a test
-    approved in the bot. Date, profile and the AI mark stay; an old cover is
-    dropped, it showed the old scene."""
+    render and the texts of an item that still waits, and only for a render
+    approved in the bot. For a ready item (a finished long video, e.g.
+    breathing) the new source must be a finished long video too. Date,
+    profile and the AI mark stay; the old cover is dropped unless keep_cover."""
     source = source.strip()
     it = _q_copy(item_id)
     if it["status"] != "ждёт" or it.get("job"):
         raise HTTPException(400, "Заменить можно только ролик, который ещё ждёт")
-    _q_source(source)
-    if not _approved(jobs.get(source) or {}):
+    info = jobs.get(source) or {}
+    if it.get("ready"):
+        if info.get("status") != "готово" or not info["job"].output.exists():
+            raise HTTPException(400, f"Готового видео {source} нет на сервере")
+        it["hours"] = probe_duration(info["job"].output) / 3600
+    else:
+        _q_source(source)
+    if not _approved(info):
         raise HTTPException(400, f"Рендер {source} не одобрен в боте")
     _q_fields(it, title, description, tags, it["publish_at"], it["user"], it.get("synthetic", False))
     it["source"] = source
@@ -2076,9 +2083,14 @@ def queue_replace(item_id: str, source: str = Form(...), title: str = Form(...),
         cur = _q_item(item_id)
         if cur["status"] != "ждёт" or cur.get("job"):
             raise HTTPException(400, "Заменить можно только ролик, который ещё ждёт")
-        for k in ("source", "title", "description", "tags"):
-            cur[k] = it[k]
-        (QDIR / item_id / "cover.jpg").unlink(missing_ok=True)
+        if cur.get("ready") and any(x is not cur and x.get("ready") and x["source"] == source
+                                    and x["status"] != "ошибка" for x in queue_items):
+            raise HTTPException(400, f"Видео {source} уже стоит в очереди")
+        for k in ("source", "title", "description", "tags", "hours"):
+            if k in it:
+                cur[k] = it[k]
+        if not keep_cover:
+            (QDIR / item_id / "cover.jpg").unlink(missing_ok=True)
         _q_save()
         return _q_public(cur)
 
