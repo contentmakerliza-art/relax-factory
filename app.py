@@ -2071,7 +2071,8 @@ async def queue_cover(item_id: str, cover_url: str = Form(""),
 
 @app.post("/queue/{item_id}/replace", dependencies=[Depends(check_api)])
 def queue_replace(item_id: str, source: str = Form(...), title: str = Form(...),
-                  description: str = Form(""), tags: str = Form(""), keep_cover: bool = Form(False)):
+                  description: str = Form(""), tags: str = Form(""), keep_cover: bool = Form(False),
+                  hours: float = Form(0)):
     """Put another video on the same day: the cloud token may swap the test
     render and the texts of an item that still waits, and only for a render
     approved in the bot. For a ready item (a finished long video, e.g.
@@ -2088,6 +2089,10 @@ def queue_replace(item_id: str, source: str = Form(...), title: str = Form(...),
         it["hours"] = probe_duration(info["job"].output) / 3600
     else:
         _q_source(source)
+        if hours:  # optional new length of the long video (e.g. 3 h instead of 10 h)
+            if not 0 < hours <= 12:
+                raise HTTPException(400, "Длина от 0 до 12 часов")
+            it["hours"] = hours
     if not _approved(info):
         raise HTTPException(400, f"Рендер {source} не одобрен в боте")
     _q_fields(it, title, description, tags, it["publish_at"], it["user"], it.get("synthetic", False))
