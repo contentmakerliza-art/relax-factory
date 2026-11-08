@@ -2023,6 +2023,21 @@ async def queue_edit(
     return await run_in_threadpool(_q_update, item_id, it)
 
 
+@app.post("/queue/{item_id}/cover", dependencies=[Depends(check_api)])
+async def queue_cover(item_id: str, cover_url: str = Form(""),
+                      cover_file: UploadFile | None = File(None)):
+    """Only the cover, and the cloud token may set it too: the item's texts,
+    date and profile stay as they are. Until the video is sent."""
+    if _q_copy(item_id)["status"] in ("отправлен", "на YouTube"):
+        raise HTTPException(400, "Ролик уже отправлен, менять поздно")
+    raw = await _q_upload(cover_file)
+    if raw is None and not cover_url.strip():
+        raise HTTPException(400, "Нет обложки: файл или ссылка")
+    await run_in_threadpool(_q_cover, item_id, raw, cover_url.strip())
+    with qlock:
+        return _q_public(_q_item(item_id))
+
+
 def _q_copy(item_id: str) -> dict:
     with qlock:
         return dict(_q_item(item_id))
