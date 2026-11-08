@@ -244,7 +244,7 @@ def _chunks(voice: Path) -> list[tuple[float, float]]:
     vol = subprocess.run(["ffmpeg", "-nostats", "-i", str(voice), "-af", "volumedetect",
                           "-f", "null", "-"], capture_output=True, text=True).stderr
     m = re.search(r"mean_volume: (-?[\d.]+) dB", vol)
-    floor = (float(m.group(1)) if m else -25.0) - 20  # well under the speech, above room tone
+    floor = (float(m.group(1)) if m else -25.0) - 13  # under the speech, above breaths and room tone
     err = subprocess.run(["ffmpeg", "-nostats", "-i", str(voice), "-af",
                           f"silencedetect=noise={floor:.0f}dB:d=0.12", "-f", "null", "-"],
                          capture_output=True, text=True).stderr
@@ -364,18 +364,24 @@ def _align(words: list[tuple[str, float, float]], lines: list[str],
     if any(cuts[i][0] < cuts[i - 1][1] - 0.05 for i in range(1, len(cuts))):
         return None  # out of order: the recognition went wrong somewhere
 
-    # whisper puts a word's start at the end of the word before: start each
-    # line where its speech really begins (the first stretch of sound after
-    # that point; breaths and clicks under 0.12 s don't count) and end it with
-    # its last stretch, so no line carries silence or the tail of a neighbour
+    # whisper's word edges are off by up to half a second, so the voice is
+    # cut only in silences: between two lines, in the longest pause near
+    # where whisper puts the change (breaths and clicks under 0.12 s count as
+    # silence). A line then runs from its first sound to its last.
     speech = [c for c in talk if c[1] - c[0] >= 0.12] or talk
-    out: list[tuple[float, float]] = []
-    for a, e in cuts:
-        a = next((s for s, x in speech if s >= a - 0.1 and s < e), a)
-        e = max((x for s, x in speech if a <= s < e and x <= e + 0.35), default=e)
-        if out and a < out[-1][1]:
-            a = out[-1][1]
-        out.append((a, max(e, a + 0.1)))
+    gaps = [(speech[g - 1][1], speech[g][0]) for g in range(1, len(speech))]
+    bounds, last = [], speech[0][0]
+    for i in range(len(cuts) - 1):
+        lo = min(cuts[i][1], cuts[i + 1][0]) - 0.6
+        hi = max(cuts[i][1], cuts[i + 1][0]) + 0.6
+        near = [g for g in gaps if g[0] > last and lo <= (g[0] + g[1]) / 2 <= hi]
+        if not near:
+            return None  # no pause where the line should change: fall back to pauses alone
+        g = max(near, key=lambda x: x[1] - x[0])
+        bounds.append(g)
+        last = g[1]
+    edges = [speech[0][0]] + [x for g in bounds for x in g] + [speech[-1][1]]
+    out = list(zip(edges[0::2], edges[1::2]))
     padded = []
     for i, (a, e) in enumerate(out):
         nxt = out[i + 1][0] if i + 1 < len(out) else e + 0.15
@@ -384,17 +390,22 @@ def _align(words: list[tuple[str, float, float]], lines: list[str],
     return padded
 
 
-def _phrases_by_words(voice: Path, lines: list[str]) -> list[tuple[float, float]] | None:
-    """The voice cut by recognised words (faster-whisper on the server);
-    None when recognition is not available or does not fit the script."""
+def _phrases_by_words(voice: Path, lines: list[str]) -> tuple[list[tuple[float, float]] | None, list]:
+    """The voice cut by recognised words (faster-whisper on the server) and
+    the words heard; None when recognition is not available or does not fit
+    the script."""
     import os
 
     try:
         from render import stt
         models = Path(os.environ.get("APP_DATA", Path(__file__).parent.parent / "data")) / "models"
-        return _align(stt.words(voice, models), lines, _chunks(voice))
+        words = stt.words(voice, models)
     except Exception:  # no model, no network for the first download, …
-        return None
+        return None, []
+    try:
+        return _align(words, lines, _chunks(voice)), words
+    except Exception:
+        return None, words
 
 
 def arrange_voice(voice: Path, b: Breath, dst: Path, run) -> tuple[Path, Breath, str]:
@@ -404,7 +415,9 @@ def arrange_voice(voice: Path, b: Breath, dst: Path, run) -> tuple[Path, Breath,
     the voice cannot be matched to the script, it is used as it is."""
     plan = parse_script(b)
     lines = plan.lines
-    parts = _phrases_by_words(voice, lines) or _phrases(voice, lines)
+    parts, heard = _phrases_by_words(voice, lines)
+    how = "по словам" if parts else "по паузам"
+    parts = parts or _phrases(voice, lines)
     if not parts:
         length = _duration(voice)
         at, phases, rise = timeline(plan, b, None, length + FADE)
@@ -423,7 +436,10 @@ def arrange_voice(voice: Path, b: Breath, dst: Path, run) -> tuple[Path, Breath,
          "-map", "[a]", "-c:a", "pcm_s16le", str(dst)])
     # for checking by ear: where each line was found in the file and where it goes
     dst.with_suffix(".txt").write_text("".join(
-        f"{a:7.2f}-{e:6.2f} → {d:7.2f}  {line}\n" for (a, e), d, line in zip(parts, at, lines)),
+        f"{a:7.2f}-{e:6.2f} → {d:7.2f}  {line}\n" for (a, e), d, line in zip(parts, at, lines))
+        + f"\n# нарезка: {how}\n"
+        + "".join(f"# {w.strip():<14} {a:6.2f}-{e:6.2f}\n" for w, a, e in heard)
+        + "# паузы: " + " ".join(f"{a:.2f}-{e:.2f}" for a, e in _chunks(voice)) + "\n",
         encoding="utf-8")
     return dst, replace(b, phases=tuple(phases), rise=rise), ""
 

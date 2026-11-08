@@ -651,7 +651,7 @@ def check_clip(job_id: str, part: str):
     return FileResponse(f, media_type="video/mp4", content_disposition_type="inline")
 
 
-@app.get("/jobs/{job_id}/voice-timing", dependencies=[Depends(check)])
+@app.get("/jobs/{job_id}/voice-timing", dependencies=[Depends(check_api)])
 def voice_timing(job_id: str):
     """Where each line of the voice was found and placed (breathing intro)."""
     f = _job_dir(job_id) / "voice-timing.txt"
