@@ -364,18 +364,24 @@ def _align(words: list[tuple[str, float, float]], lines: list[str],
     if any(cuts[i][0] < cuts[i - 1][1] - 0.05 for i in range(1, len(cuts))):
         return None  # out of order: the recognition went wrong somewhere
 
-    def snap(t: float, edges: list[float]) -> float:
-        near = min(edges, key=lambda x: abs(x - t))
-        return near if abs(near - t) <= 0.35 else t
-
-    starts, ends = [a for a, _ in talk], [e for _, e in talk]
-    out = []
-    for i, (a, e) in enumerate(cuts):
-        a, e = snap(a, starts), snap(e, ends)
+    # whisper puts a word's start at the end of the word before: start each
+    # line where its speech really begins (the first stretch of sound after
+    # that point; breaths and clicks under 0.12 s don't count) and end it with
+    # its last stretch, so no line carries silence or the tail of a neighbour
+    speech = [c for c in talk if c[1] - c[0] >= 0.12] or talk
+    out: list[tuple[float, float]] = []
+    for a, e in cuts:
+        a = next((s for s, x in speech if s >= a - 0.1 and s < e), a)
+        e = max((x for s, x in speech if a <= s < e and x <= e + 0.35), default=e)
         if out and a < out[-1][1]:
             a = out[-1][1]
         out.append((a, max(e, a + 0.1)))
-    return [(max(0.0, a - 0.05), e + 0.15) for a, e in out]
+    padded = []
+    for i, (a, e) in enumerate(out):
+        nxt = out[i + 1][0] if i + 1 < len(out) else e + 0.15
+        prev = out[i - 1][1] if i else 0.0
+        padded.append((max(prev, a - 0.03), max(e, min(e + 0.1, nxt - 0.02))))
+    return padded
 
 
 def _phrases_by_words(voice: Path, lines: list[str]) -> list[tuple[float, float]] | None:
