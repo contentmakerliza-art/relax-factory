@@ -36,3 +36,19 @@ def load(path: Path) -> np.ndarray:
     raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-ac", "1", "-ar", "16000",
                           "-f", "s16le", "-"], capture_output=True, check=True).stdout
     return np.frombuffer(raw, np.int16).astype(np.float32) / 32768.0
+
+
+def words(path: Path, models: Path, language: str = "en") -> list[tuple[str, float, float]]:
+    """Every spoken word with its start and end in seconds: how a breathing
+    voice is cut into the script's lines (pauses alone mislead there)."""
+    from faster_whisper import WhisperModel
+
+    model = WhisperModel(MODEL, device="cpu", compute_type="int8", cpu_threads=2,
+                         download_root=str(models))
+    try:
+        segments, _ = model.transcribe(load(path), language=language, beam_size=5,
+                                       word_timestamps=True, vad_filter=False)
+        return [(w.word, w.start, w.end) for seg in segments for w in (seg.words or [])]
+    finally:
+        del model
+        gc.collect()

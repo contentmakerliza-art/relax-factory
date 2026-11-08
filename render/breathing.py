@@ -311,6 +311,86 @@ def _phrases(voice: Path, lines: list[str]) -> list[tuple[float, float]] | None:
     return [(max(0.0, a - 0.05), e + 0.15) for a, e in reversed(cuts)]
 
 
+def _tokens(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", text.lower().replace("\u2019", "'").replace("'", ""))
+
+
+def _align(words: list[tuple[str, float, float]], lines: list[str],
+           talk: list[tuple[float, float]]) -> list[tuple[float, float]] | None:
+    """One (start, end) per script line from the recognised words: the
+    script's words are matched to the heard ones in order, each line runs
+    from its first heard word to its last, and the edges snap to the nearest
+    pause in the file. None when a line was not heard at all."""
+    from difflib import SequenceMatcher
+
+    script, owner = [], []
+    for i, line in enumerate(lines):
+        for t in _tokens(line):
+            script.append(t)
+            owner.append(i)
+    heard, times = [], []
+    for w, a, e in words:
+        for t in _tokens(w):
+            heard.append(t)
+            times.append((a, e))
+    if not script or not heard:
+        return None
+    spans: list[list[float]] = [[] for _ in lines]
+    for blk in SequenceMatcher(None, script, heard, autojunk=False).get_matching_blocks():
+        for k in range(blk.size):
+            a, e = times[blk.b + k]
+            spans[owner[blk.a + k]] += [a, e]
+    cuts: list[tuple[float, float] | None] = [(min(s), max(s)) if s else None for s in spans]
+    i = 0
+    while i < len(cuts):  # lines nobody heard (a whispered «In…»): the speech between neighbours
+        if cuts[i] is not None:
+            i += 1
+            continue
+        j = i
+        while j < len(cuts) and cuts[j] is None:
+            j += 1
+        lo = cuts[i - 1][1] if i else 0.0
+        hi = cuts[j][0] if j < len(cuts) else float("inf")
+        between = [c for c in talk if c[0] >= lo - 0.05 and c[1] <= hi + 0.05]
+        k = j - i
+        if len(between) < k:
+            return None
+        gaps = sorted(range(1, len(between)), key=lambda g: between[g][0] - between[g - 1][1],
+                      reverse=True)[: k - 1]
+        bounds = [0] + sorted(gaps) + [len(between)]
+        for n in range(k):
+            cuts[i + n] = (between[bounds[n]][0], between[bounds[n + 1] - 1][1])
+        i = j
+    if any(cuts[i][0] < cuts[i - 1][1] - 0.05 for i in range(1, len(cuts))):
+        return None  # out of order: the recognition went wrong somewhere
+
+    def snap(t: float, edges: list[float]) -> float:
+        near = min(edges, key=lambda x: abs(x - t))
+        return near if abs(near - t) <= 0.35 else t
+
+    starts, ends = [a for a, _ in talk], [e for _, e in talk]
+    out = []
+    for i, (a, e) in enumerate(cuts):
+        a, e = snap(a, starts), snap(e, ends)
+        if out and a < out[-1][1]:
+            a = out[-1][1]
+        out.append((a, max(e, a + 0.1)))
+    return [(max(0.0, a - 0.05), e + 0.15) for a, e in out]
+
+
+def _phrases_by_words(voice: Path, lines: list[str]) -> list[tuple[float, float]] | None:
+    """The voice cut by recognised words (faster-whisper on the server);
+    None when recognition is not available or does not fit the script."""
+    import os
+
+    try:
+        from render import stt
+        models = Path(os.environ.get("APP_DATA", Path(__file__).parent.parent / "data")) / "models"
+        return _align(stt.words(voice, models), lines, _chunks(voice))
+    except Exception:  # no model, no network for the first download, …
+        return None
+
+
 def arrange_voice(voice: Path, b: Breath, dst: Path, run) -> tuple[Path, Breath, str]:
     """Lay a compact voice recording onto the breathing timeline: intro lines
     first, each breath's lines on its inhale / hold / exhale, then the closing
@@ -318,7 +398,7 @@ def arrange_voice(voice: Path, b: Breath, dst: Path, run) -> tuple[Path, Breath,
     the voice cannot be matched to the script, it is used as it is."""
     plan = parse_script(b)
     lines = plan.lines
-    parts = _phrases(voice, lines)
+    parts = _phrases_by_words(voice, lines) or _phrases(voice, lines)
     if not parts:
         length = _duration(voice)
         at, phases, rise = timeline(plan, b, None, length + FADE)
