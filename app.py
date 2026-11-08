@@ -1957,6 +1957,24 @@ def _q_draft_news() -> None:
            buttons=[[{"text": f"✅ Подтвердить ({len(drafts)})", "callback_data": "qc:all"}]])
 
 
+@app.post("/queue/swap", dependencies=[Depends(check_api)])
+def queue_swap(a: str = Form(...), b: str = Form(...)):
+    """Two waiting videos of one profile trade their publish dates (the cloud
+    token may do it): each keeps its texts and cover."""
+    with qlock:
+        x, y = _q_item(a.strip()), _q_item(b.strip())
+        if x is y:
+            raise HTTPException(400, "Нужны два разных ролика")
+        for it in (x, y):
+            if it["status"] != "ждёт" or it.get("job"):
+                raise HTTPException(400, f"Ролик «{it['title'][:40]}» уже не ждёт: менять дату поздно")
+        if x.get("user") != y.get("user"):
+            raise HTTPException(400, "Ролики разных профилей Upload-Post")
+        x["publish_at"], y["publish_at"] = y["publish_at"], x["publish_at"]
+        _q_save()
+        return [_q_public(x), _q_public(y)]
+
+
 @app.post("/queue/confirm", dependencies=[Depends(check)])
 def queue_confirm():
     """Her click: all drafts go into the queue for real."""
