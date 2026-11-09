@@ -236,7 +236,10 @@ def need_gb(s: RenderSettings, black: bool = False) -> float:
     """Disk a render may take: the video at its bitrate (a black screen takes
     almost nothing), the sound (twice: once more in the kit for assembling on the computer), and
     room for the working files."""
-    mbit = 0.5 if black else float(s.video_bitrate.rstrip("M") or 8)
+    if black:  # a short intro + a 10 s black piece repeated by copy: nearly all of it is the sound
+        audio = float(s.audio_bitrate.rstrip("k") or 320) / 1000
+        return audio * 2 * s.duration / 8000 * 1.1 + 1.5
+    mbit = float(s.video_bitrate.rstrip("M") or 8)
     return (mbit + 0.7) * s.duration / 8000 * 1.1 + 2
 
 
@@ -410,8 +413,9 @@ def start_job(
         color_drift=color_drift, color_period=color_period, stabilize=stabilize, mask_mode=mask_mode if mask_mode in ("still", "stab") else "still", smooth=smooth,
         intro_crossfade=intro_crossfade,
     )
-    queued = sum(need_gb(i["job"].settings, _black(i)) for i in jobs.values()
-                 if i["status"] in ("в очереди", "работает"))
+    # only the render now running: renders wait their turn, and each one checks
+    # the real free space again just before it starts
+    queued = sum(need_gb(i["job"].settings, _black(i)) for i in jobs.values() if i["status"] == "работает")
     if problem := space_problem(settings, breathing, queued):
         raise HTTPException(400, problem)
     out = folder / f"{name}_{hours:g}h.mp4"
@@ -677,12 +681,24 @@ def delete(job_id: str):
 
 
 @app.post("/jobs/cleanup", dependencies=[Depends(check)])
-def cleanup(days: float = Form(7.0)):
+def cleanup(days: float = Form(7.0), posted: bool = Form(False)):
     """Delete finished or failed videos older than `days`, and uploads that
-    were never started (older than a day)."""
+    were never started (older than a day). posted: also approved tests and
+    finished videos whose queue videos are all on YouTube already, whatever
+    their age (the sources stay in the sources copy and on Drive)."""
     now, freed, keep = time.time(), 0, _q_jobs()
+    with qlock:
+        done = {j for it in queue_items if it["status"] == "на YouTube" for j in (it["source"], it.get("job")) if j}
     for job_id, info in list(jobs.items()):
-        if job_id in keep or _approved(info) or _awaiting(info):
+        if job_id in keep or _awaiting(info) or info["status"] == "работает":
+            continue
+        if posted and job_id in done and info["status"] in ("готово", "ошибка"):
+            freed += _size(DATA / job_id)
+            _keep_notes(job_id, info)
+            shutil.rmtree(DATA / job_id, ignore_errors=True)
+            jobs.pop(job_id)
+            continue
+        if _approved(info):
             continue
         created = info.get("created") or (DATA / job_id).stat().st_mtime
         if info["status"] in ("готово", "ошибка") and now - created > days * 86400:
