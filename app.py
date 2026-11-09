@@ -5,6 +5,7 @@ Run:  APP_PASSWORD=... uvicorn app:app --host 0.0.0.0 --port 8000
 
 from __future__ import annotations
 
+import hashlib
 import html
 import json
 import os
@@ -1657,6 +1658,29 @@ threading.Thread(target=_uploadpost_watch, daemon=True).start()
 # Upload-Post and deletes the long file once YouTube has it.
 
 QDIR = DATA / "queue"
+LOGOS = DATA / "logos"  # <profile>.png + settings.json: the channel logo over queue renders
+
+
+def _logo_name(user: str) -> str:
+    user = user.strip()
+    if not re.fullmatch(r"[\w.@ -]{1,80}", user):
+        raise HTTPException(400, "Странное имя профиля")
+    return hashlib.sha1(user.encode()).hexdigest()[:16] + ".png"
+
+
+def _logo_settings() -> dict:
+    try:
+        return json.loads((LOGOS / "settings.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _logo_for(user: str) -> tuple[Path, dict] | None:
+    conf = _logo_settings().get(user.strip())
+    if not conf:
+        return None
+    path = LOGOS / _logo_name(user)
+    return (path, conf) if path.is_file() else None
 QFILE = QDIR / "queue.json"
 Q_LEAD = float(os.environ.get("RELAX_QUEUE_LEAD_H", "24")) * 3600  # render this long before publishing
 Q_MAX_FILES = 2  # long videos kept on the server at once
@@ -1854,6 +1878,73 @@ def _q_public(it: dict) -> dict:
     return row
 
 
+@app.get("/logos", dependencies=[Depends(check_api)])
+def logos_list():
+    """Channel logos by Upload-Post profile: put on every long video the queue makes for it."""
+    return [{"user": u, **c, "url": f"logos/{urllib.parse.quote(u)}"} for u, c in _logo_settings().items()
+            if (LOGOS / _logo_name(u)).is_file()]
+
+
+@app.get("/logos/{user}", dependencies=[Depends(check)])
+def logo_get(user: str):
+    path = LOGOS / _logo_name(user)
+    if not path.is_file():
+        raise HTTPException(404)
+    return FileResponse(path, media_type="image/png")
+
+
+@app.post("/logos", dependencies=[Depends(check_api)])
+async def logo_set(user: str = Form(...), file: UploadFile | None = File(None), logo_url: str = Form(""),
+                   opacity: float = Form(0.35), width: float = Form(0.07), margin: float = Form(0.03)):
+    """A PNG with transparency (a file or a Drive link), or only new numbers for
+    the logo already there. opacity 0.05–1, width 0.02–0.3 of the frame,
+    margin 0–0.15 of the frame width; bottom right corner."""
+    user = user.strip()
+    name = _logo_name(user)
+    if not (0.05 <= opacity <= 1 and 0.02 <= width <= 0.3 and 0 <= margin <= 0.15):
+        raise HTTPException(400, "Прозрачность 0.05–1, ширина 0.02–0.3, отступ 0–0.15")
+    raw = None
+    if file and file.filename:
+        raw = await file.read(5 * 1024 * 1024 + 1)
+    elif logo_url.strip():
+        raw = await run_in_threadpool(_logo_download, logo_url.strip())
+    if raw is not None:
+        if len(raw) > 5 * 1024 * 1024 or not raw.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise HTTPException(400, "Нужен PNG (с прозрачностью) не больше 5 МБ")
+        LOGOS.mkdir(parents=True, exist_ok=True)
+        tmp = LOGOS / (name + ".tmp")
+        tmp.write_bytes(raw)
+        tmp.replace(LOGOS / name)
+    elif not (LOGOS / name).is_file():
+        raise HTTPException(400, "Пришлите PNG логотипа")
+    conf = _logo_settings()
+    conf[user] = {"opacity": opacity, "width": width, "margin": margin}
+    (LOGOS / "settings.json").write_text(json.dumps(conf, ensure_ascii=False), encoding="utf-8")
+    return {"user": user, **conf[user]}
+
+
+def _logo_download(url: str) -> bytes:
+    with tempfile.TemporaryDirectory() as td:
+        dst = Path(td)
+        try:
+            got = fetch_folder(url, dst, {".png"})
+        except RuntimeError as e:
+            raise HTTPException(400, f"Не скачалось с Диска: {e}")
+        if not got:
+            raise HTTPException(400, "На Диске нет PNG")
+        return Path(got[0]).read_bytes()
+
+
+@app.delete("/logos/{user}", dependencies=[Depends(check)])
+def logo_delete(user: str):
+    conf = _logo_settings()
+    conf.pop(user.strip(), None)
+    LOGOS.mkdir(parents=True, exist_ok=True)
+    (LOGOS / "settings.json").write_text(json.dumps(conf, ensure_ascii=False), encoding="utf-8")
+    (LOGOS / _logo_name(user)).unlink(missing_ok=True)
+    return {"ok": True}
+
+
 @app.get("/queue", dependencies=[Depends(check_api)])
 def queue_list():
     """Statuses: ждёт · рендер · проверка · отправлен (Upload-Post загружает) ·
@@ -1880,6 +1971,7 @@ async def queue_add(
     private_only: bool = Form(False),
     ready: bool = Form(False),
     draft: bool = Form(False),
+    logo: bool = Form(True),
 ):
     """draft: the item is only a draft (status «черновик»): nothing is rendered
     or sent until a person confirms it in the app or in the Telegram bot.
@@ -1888,12 +1980,13 @@ async def queue_add(
     breathing with a black screen."""
     raw = await _q_upload(cover_file)
     return await run_in_threadpool(_q_new, source, request.url.netloc, title, description, tags, publish_at,
-                                   user, cover_url, raw, synthetic, hours, bitrate, render_now, private_only, ready, draft)
+                                   user, cover_url, raw, synthetic, hours, bitrate, render_now, private_only, ready, draft, logo)
 
 
 def _q_new(source: str, host: str, title: str, description: str, tags: str, publish_at: str, user: str,
            cover_url: str, raw: bytes | None, synthetic: bool, hours: float, bitrate: int,
-           render_now: bool, private_only: bool, ready: bool = False, draft: bool = False) -> dict:
+           render_now: bool, private_only: bool, ready: bool = False, draft: bool = False,
+           logo: bool = True) -> dict:
     source = source.strip()
     if ready:
         info = jobs.get(source)
@@ -1909,7 +2002,8 @@ def _q_new(source: str, host: str, title: str, description: str, tags: str, publ
         raise HTTPException(400, "Длина от 0 до 12 часов, битрейт от 2 до 15 Мбит/с")
     it = {"id": uuid.uuid4().hex[:8], "source": source, "hours": hours, "bitrate": bitrate,
           "status": "черновик" if draft else "ждёт", "error": "", "note": "", "job": "", "created": time.time(),
-          "host": host, "render_now": render_now, "private_only": private_only, "ready": ready}
+          "host": host, "render_now": render_now, "private_only": private_only, "ready": ready,
+          "logo": logo}
     _q_fields(it, title, description, tags, publish_at, user, synthetic)
     it["channel"] = _q_channel(it["user"])
     if raw is not None or cover_url.strip():  # without a cover YouTube picks a frame itself
@@ -2030,6 +2124,7 @@ async def queue_edit(
     synthetic: bool = Form(False),
     render_now: bool | None = Form(None),
     private_only: bool | None = Form(None),
+    logo: bool | None = Form(None),
 ):
     """Texts, date, profile and cover can change until the video is sent;
     the test render only until its long video is being made."""
@@ -2047,6 +2142,8 @@ async def queue_edit(
         it["render_now"] = render_now
     if private_only is not None:
         it["private_only"] = private_only
+    if logo is not None:
+        it["logo"] = logo
     it["channel"] = await run_in_threadpool(_q_channel, it["user"])
     raw = await _q_upload(cover_file)
     if raw is not None or cover_url.strip():
@@ -2067,6 +2164,18 @@ async def queue_cover(item_id: str, cover_url: str = Form(""),
     await run_in_threadpool(_q_cover, item_id, raw, cover_url.strip())
     with qlock:
         return _q_public(_q_item(item_id))
+
+
+@app.post("/queue/{item_id}/synthetic", dependencies=[Depends(check_api)])
+def queue_synthetic(item_id: str, synthetic: bool = Form(...)):
+    """YouTube's «altered or synthetic content» mark of an item not sent yet."""
+    with qlock:
+        it = _q_item(item_id)
+        if it["status"] in ("отправлен", "на YouTube"):
+            raise HTTPException(400, "Ролик уже отправлен, менять поздно")
+        it["synthetic"] = synthetic
+        _q_save()
+        return _q_public(it)
 
 
 @app.post("/queue/{item_id}/replace", dependencies=[Depends(check_api)])
@@ -2126,7 +2235,7 @@ def _q_update(item_id: str, it: dict) -> dict:
         if cur["source"] != it["source"] and cur.get("job"):
             raise HTTPException(400, "Длинное видео уже начато из прежнего рендера")
         for k in ("source", "title", "description", "tags", "user", "synthetic", "publish_at",
-                  "render_now", "private_only", "channel"):
+                  "render_now", "private_only", "channel", "logo"):
             if k in it:
                 cur[k] = it[k]
         _q_save()
@@ -2197,6 +2306,7 @@ def _q_start_render(it: dict) -> None:
     known = {k: v for k, v in meta.get("settings", {}).items() if k in RenderSettings.__dataclass_fields__}
     settings = RenderSettings(**known)
     settings.duration, settings.video_bitrate, settings.stab_mask = it["hours"] * 3600, f"{it['bitrate']}M", ""
+    settings.logo = ""
     job_id = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
     folder = DATA / job_id
     for kind in KINDS:
@@ -2212,6 +2322,12 @@ def _q_start_render(it: dict) -> None:
     mask, still = split_mask(sorted((folder / "mask").iterdir()))
     if (QDIR / it["id"] / "cover.jpg").exists():
         shutil.copy2(QDIR / it["id"] / "cover.jpg", folder / "cover.jpg")
+    if it.get("logo", True) and (found_logo := _logo_for(it["user"])):
+        shutil.copy2(found_logo[0], folder / "logo.png")  # a later change of the logo does not touch this video
+        settings.logo = str(folder / "logo.png")
+        settings.logo_opacity = found_logo[1]["opacity"]
+        settings.logo_width = found_logo[1]["width"]
+        settings.logo_margin = found_logo[1]["margin"]
     out = folder / f"{visuals[0].stem}_{it['hours']:g}h.mp4"
     jobs[job_id] = {"job": Job(visuals, sorted((folder / "tracks").iterdir()), out, settings,
                                ambient=sorted((folder / "ambient").iterdir())[:5], mask=mask, still=still,

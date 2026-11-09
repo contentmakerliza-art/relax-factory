@@ -54,6 +54,10 @@ class RenderSettings:
     codec: str = "h264"                 # h264 | h265
     audio_bitrate: str = "320k"
     seed: int | None = None
+    logo: str = ""                      # PNG with transparency, put over the whole video (bottom right)
+    logo_opacity: float = 0.35          # 0..1
+    logo_width: float = 0.07            # share of the frame width
+    logo_margin: float = 0.03           # gap from the bottom right corner, share of the frame width
 
 
 @dataclass
@@ -497,6 +501,23 @@ def build_intro(clips: list[Path], seg: Path, seg_len: float, dst: Path, s: Rend
     return probe_duration(dst)
 
 
+def add_logo(src: Path, dst: Path, s: RenderSettings) -> None:
+    """The channel logo over the picture, bottom right, half see-through.
+    src is a near-lossless work file; this is its one final encode, so the
+    loop and the intro keep matching parameters for the plain copy."""
+    w = max(2, round(s.width * s.logo_width / 2) * 2)
+    m = round(s.width * s.logo_margin)
+    flt = (f"[1:v]format=rgba,scale={w}:-1:flags=lanczos,colorchannelmixer=aa={s.logo_opacity:.3f}[l];"
+           f"[0:v]setpts=PTS-STARTPTS,fps={s.fps}[b];"
+           f"[b][l]overlay=W-w-{m}:H-h-{m}:eof_action=repeat:format=auto,format=yuv420p[v]")
+    _run(["ffmpeg", "-y", "-i", str(src), "-i", s.logo, "-filter_complex", flt,
+          "-map", "[v]", "-an", *_video_codec_args(s), str(dst)])
+
+
+def _has_logo(s: RenderSettings) -> bool:
+    return bool(s.logo) and Path(s.logo).is_file()
+
+
 # ---------- audio ----------
 
 def measure_loudness(path: Path) -> float:
@@ -904,14 +925,27 @@ def render(job: Job, progress: Progress | None = None) -> Path:
             return _render_breathing(job, s, say, tmp)
         say("Готовлю петлю видео", 0.05)
         seg = tmp / "loop.mp4"
-        seg_len = build_loop_segment(job.visuals, seg, s, tmp, job.mask, job.still)
+        logo = _has_logo(s)
+        # with a logo the loop and the intro are built near-lossless first and
+        # get their one final encode together with the logo
+        base = replace(s, codec="work") if logo else s
+        raw_seg = tmp / "loop_nologo.mp4" if logo else seg
+        seg_len = build_loop_segment(job.visuals, raw_seg, base, tmp, job.mask, job.still)
 
         intro_len = 0.0
         if job.intro:
             say("Готовлю вступление", 0.25)
             intro = tmp / "intro.mp4"
+            raw_intro = tmp / "intro_nologo.mp4" if logo else intro
             clips = [v for v in job.visuals if v.suffix.lower() not in IMAGE_EXTS]
-            intro_len = build_intro(job.intro, seg, seg_len, intro, s, tmp, clips[0] if clips else None)
+            intro_len = build_intro(job.intro, raw_seg, seg_len, raw_intro, base, tmp, clips[0] if clips else None)
+        if logo:
+            say("Ставлю логотип", 0.28)
+            add_logo(raw_seg, seg, s)
+            seg_len = probe_duration(seg)
+            if intro_len:
+                add_logo(raw_intro, intro, s)
+                intro_len = probe_duration(intro)
 
         say("Делаю превью", 0.3)
         job.previews = make_previews(seg, seg_len, job.output)
