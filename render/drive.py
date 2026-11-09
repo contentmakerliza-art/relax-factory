@@ -6,6 +6,7 @@ The folder (or file) must be shared as "Anyone with the link can view".
 from __future__ import annotations
 
 import re
+import json
 import os
 import shutil
 import tempfile
@@ -83,13 +84,32 @@ def _listing(folder_id: str) -> list[tuple[str, str]]:
         hit = _lists.get(folder_id)
         if hit and time.time() - hit[0] < LIST_TTL:
             return hit[1]
-        with tempfile.TemporaryDirectory() as tmp:
-            files = _retry("список файлов папки", lambda: gdown.download_folder(
-                id=folder_id, output=tmp, quiet=True, use_cookies=False, skip_download=True,
-                timeout=TIMEOUT))
+        saved = CACHE / "_lists" / f"{folder_id}.json" if CACHE else None
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                files = _retry("список файлов папки", lambda: gdown.download_folder(
+                    id=folder_id, output=tmp, quiet=True, use_cookies=False, skip_download=True,
+                    timeout=TIMEOUT))
+        except RuntimeError:
+            # Drive is limiting the link: the last list known (it survives
+            # restarts) is good enough when its files are in the cache
+            if saved and saved.exists():
+                rows = [tuple(r) for r in json.loads(saved.read_text(encoding="utf-8"))]
+                if all(_has(i) for i, _ in rows):
+                    _lists[folder_id] = (time.time(), rows)
+                    return rows
+            raise
         rows = [(f.id, f.path) for f in files or []]
         _lists[folder_id] = (time.time(), rows)
+        if saved:
+            saved.parent.mkdir(parents=True, exist_ok=True)
+            saved.write_text(json.dumps(rows), encoding="utf-8")
         return rows
+
+
+def _has(file_id: str) -> bool:
+    home = CACHE / file_id if CACHE else None
+    return bool(home and home.is_dir() and any(p.is_file() for p in home.iterdir()))
 
 
 def _cached(file_id: str, name: str, scratch: Path) -> Path:

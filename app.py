@@ -712,6 +712,8 @@ def cleanup(days: float = Form(7.0), posted: bool = Form(False)):
             shutil.rmtree(folder, ignore_errors=True)
     # Drive files no job uses any more (one link left) and not asked for a week
     for d in drive.CACHE.iterdir() if drive.CACHE.is_dir() else []:
+        if d.name == "_lists":
+            continue
         files = [f for f in d.rglob("*") if f.is_file()]
         if all(f.stat().st_nlink == 1 and now - f.stat().st_mtime > 7 * 86400 for f in files):
             freed += _size(d)
@@ -1301,10 +1303,25 @@ def _stt_pending() -> list[tuple[str, dict]]:
             if note.get("voice") and "transcript" not in note and note.get("stt_tries", 0) < 3]
 
 
+STT_MEM_GB = float(os.environ.get("RELAX_STT_MEM_GB", "1.0"))
+
+
+def _mem_free_gb() -> float:
+    """MemAvailable: during a render a voice comment is still heard when the
+    render leaves room for the model (about half a GB)."""
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) / 1e6
+    except (OSError, ValueError, IndexError):
+        pass
+    return 0.0
+
+
 def _stt_once() -> bool:
     """Transcribes what is waiting; False when the model failed (wait longer)."""
     todo = _stt_pending()
-    if not todo or (DATA / "busy").exists():
+    if not todo or (DATA / "busy").exists() and _mem_free_gb() < STT_MEM_GB:
         return True
     files = [DATA / job_id / "comments" / note["voice"] for job_id, note in todo]
     try:
