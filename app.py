@@ -1716,6 +1716,7 @@ def _logo_for(user: str) -> tuple[Path, dict] | None:
     return (path, conf) if path.is_file() else None
 QFILE = QDIR / "queue.json"
 Q_LEAD = float(os.environ.get("RELAX_QUEUE_LEAD_H", "24")) * 3600  # render this long before publishing
+Q_READY_LEAD = float(os.environ.get("RELAX_READY_LEAD_H", "72")) * 3600  # finished videos go out this early
 Q_MAX_FILES = 2  # long videos kept on the server at once
 Q_FILES = ("рендер", "проверка", "отправлен")
 Q_SETTINGS = QDIR / "settings.json"
@@ -2331,6 +2332,20 @@ def _q_drop_render(it: dict) -> None:
     it["job"] = ""
 
 
+def _q_drop_ready(it: dict) -> None:
+    """A finished long video that YouTube has now: delete it from the server
+    (her standing rule), unless another waiting queue item still sends it.
+    Its sources stay in the sources copy and on Drive."""
+    job_id = it["source"]
+    info = jobs.get(job_id)
+    if not info or info["status"] == "работает" or any(
+            x is not it and job_id in (x["source"], x.get("job")) and x["status"] != "на YouTube" for x in queue_items):
+        return
+    _keep_notes(job_id, info)
+    shutil.rmtree(DATA / job_id, ignore_errors=True)
+    jobs.pop(job_id, None)
+
+
 def _q_start_render(it: dict) -> None:
     """A new job with the test render's own files (hard links, no extra space)
     and settings; only the length and the bitrate differ."""
@@ -2453,6 +2468,8 @@ def _q_step(it: dict) -> None:
         up = (info or {}).get("up") or {}
         if up.get("status") == "загружено":
             _q_drop_render(it)  # YouTube has it: the long file only takes space
+            if it.get("ready"):
+                _q_drop_ready(it)
             it["status"], it["done_at"] = "на YouTube", time.time()
             _q_say(f"✅ На YouTube: {_q_label(it)}. " + ("Приватное и публиковаться не будет." if it.get("private_only")
                                                        else "Приватное, откроется само в это время."))
@@ -2477,15 +2494,21 @@ def _q_next() -> None:
     when the item asks), at most two long files on the server, and only when
     the disk has room."""
     now = datetime.now(MSK)
-    for it in queue_items:  # finished videos: no render, sent about a day ahead
-        if it["status"] == "ждёт" and it.get("ready"):
-            when = _q_when(it["publish_at"])
-            if (when - now).total_seconds() <= Q_LEAD or it.get("render_now"):
-                if it["source"] not in jobs:
-                    _q_fail(it, f"Видео {it['source']} больше нет на сервере")
-                else:
-                    it.update(job=it["source"], status="проверка")
-                    _q_say(f"📦 Готовое видео {_q_label(it)} уходит в Upload-Post.")
+    # finished videos: no render; sent up to three days ahead, one at a time,
+    # so their big files leave the disk early (deleted once YouTube has them)
+    sending = any(it.get("ready") and it["status"] in ("проверка", "отправлен") for it in queue_items)
+    for it in sorted((it for it in queue_items if it["status"] == "ждёт" and it.get("ready")),
+                     key=lambda it: it["publish_at"]):
+        if sending:
+            break
+        when = _q_when(it["publish_at"])
+        if (when - now).total_seconds() <= Q_READY_LEAD or it.get("render_now"):
+            if it["source"] not in jobs:
+                _q_fail(it, f"Видео {it['source']} больше нет на сервере")
+            else:
+                it.update(job=it["source"], status="проверка")
+                _q_say(f"📦 Готовое видео {_q_label(it)} уходит в Upload-Post.")
+                sending = True
     if any(it["status"] == "рендер" for it in queue_items) or _q_files() >= Q_MAX_FILES:
         return
     waiting = sorted((it for it in queue_items if it["status"] == "ждёт" and not it.get("ready")),
