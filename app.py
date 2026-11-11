@@ -721,11 +721,20 @@ def cleanup(days: float = Form(7.0), posted: bool = Form(False)):
     return {"freed_gb": round(freed / 1e9, 1), "free_gb": round(free_gb(), 1)}
 
 
+@app.post("/queue/cleanup-posted", dependencies=[Depends(check_api)])
+def queue_cleanup_posted():
+    """The «Удалить вышедшие на YouTube» button for Claude in the cloud
+    (Svetlana allowed it 11.11.2026): only renders whose queue videos are all
+    on YouTube already, plus the usual leftovers; approved sources stay in the
+    sources copy and on Drive."""
+    return cleanup(days=100000.0, posted=True)
+
+
 def _size(folder: Path) -> int:
     return sum(p.stat().st_size for p in folder.rglob("*") if p.is_file())
 
 
-@app.get("/disk", dependencies=[Depends(check)])
+@app.get("/disk", dependencies=[Depends(check_api)])
 def disk():
     return {"free_gb": round(free_gb(), 1), "reserve_gb": RESERVE_GB}
 
