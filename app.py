@@ -685,7 +685,8 @@ def cleanup(days: float = Form(7.0), posted: bool = Form(False)):
     """Delete finished or failed videos older than `days`, and uploads that
     were never started (older than a day). posted: also approved tests and
     finished videos whose queue videos are all on YouTube already, whatever
-    their age (the sources stay in the sources copy and on Drive)."""
+    their age (the sources stay in the sources copy and on Drive), and tests
+    sent back with «Поправить» over a day ago (their edits stay in notes)."""
     now, freed, keep = time.time(), 0, _q_jobs()
     with qlock:
         done = {j for it in queue_items if it["status"] == "на YouTube" for j in (it["source"], it.get("job")) if j}
@@ -695,6 +696,12 @@ def cleanup(days: float = Form(7.0), posted: bool = Form(False)):
         if posted and job_id in done and info["status"] in ("готово", "ошибка"):
             freed += _size(DATA / job_id)
             _keep_notes(job_id, info)
+            shutil.rmtree(DATA / job_id, ignore_errors=True)
+            jobs.pop(job_id)
+            continue
+        if posted and _rejected(info):
+            freed += _size(DATA / job_id)
+            _keep_notes(job_id, info)  # her edit stays readable in /approvals
             shutil.rmtree(DATA / job_id, ignore_errors=True)
             jobs.pop(job_id)
             continue
@@ -970,6 +977,15 @@ TG_MAX_MB = 48  # Bot API takes files up to 50 MB
 
 def _approved(info: dict) -> bool:
     return (info.get("approval") or {}).get("status") == "одобрено"
+
+
+REJECTED_KEEP_H = 24  # a test sent back for edits stays a day: the fix may want its sources
+
+
+def _rejected(info: dict) -> bool:
+    """Sent back with «Поправить» more than a day ago: a new version replaces it."""
+    ap = info.get("approval") or {}
+    return ap.get("status") == "правка" and time.time() - (ap.get("time") or time.time()) > REJECTED_KEEP_H * 3600
 
 
 def _awaiting(info: dict) -> bool:
@@ -2544,18 +2560,22 @@ def _q_next() -> None:
 
 
 _q_posted = threading.Event()
+_q_cleaned_at = 0.0  # also every 6 h: tests sent back for edits age out
 
 
 def _q_cleanup_posted() -> None:
-    """Delete by itself what the «Удалить вышедшие на YouTube» button deletes,
-    each time a queue video lands on YouTube (Svetlana asked 11.11.2026)."""
-    if not _q_posted.is_set():
+    """Delete by itself what the «Удалить вышедшие на YouTube» button deletes
+    (renders on YouTube, tests sent back for edits over a day ago), each time
+    a queue video lands on YouTube and every 6 h (Svetlana asked 11.11.2026)."""
+    global _q_cleaned_at
+    if not _q_posted.is_set() and time.time() - _q_cleaned_at < 6 * 3600:
         return
     _q_posted.clear()
+    _q_cleaned_at = time.time()
     r = cleanup(days=100000.0, posted=True)
     if r["freed_gb"] > 0:
         with qlock:
-            _q_say(f"🧹 Удалила с сервера вышедшее на YouTube: освободилось {r['freed_gb']} ГБ, свободно {r['free_gb']} ГБ.")
+            _q_say(f"🧹 Удалила с сервера вышедшее на YouTube и отклонённые пробы: освободилось {r['freed_gb']} ГБ, свободно {r['free_gb']} ГБ.")
 
 
 def _queue_loop() -> None:
