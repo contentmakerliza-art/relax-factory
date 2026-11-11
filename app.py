@@ -721,11 +721,20 @@ def cleanup(days: float = Form(7.0), posted: bool = Form(False)):
     return {"freed_gb": round(freed / 1e9, 1), "free_gb": round(free_gb(), 1)}
 
 
+@app.post("/queue/cleanup-posted", dependencies=[Depends(check_api)])
+def queue_cleanup_posted():
+    """The «Удалить вышедшие на YouTube» button for Claude in the cloud
+    (Svetlana allowed it 11.11.2026): only renders whose queue videos are all
+    on YouTube already, plus the usual leftovers; approved sources stay in the
+    sources copy and on Drive."""
+    return cleanup(days=100000.0, posted=True)
+
+
 def _size(folder: Path) -> int:
     return sum(p.stat().st_size for p in folder.rglob("*") if p.is_file())
 
 
-@app.get("/disk", dependencies=[Depends(check)])
+@app.get("/disk", dependencies=[Depends(check_api)])
 def disk():
     return {"free_gb": round(free_gb(), 1), "reserve_gb": RESERVE_GB}
 
@@ -2471,6 +2480,7 @@ def _q_step(it: dict) -> None:
             if it.get("ready"):
                 _q_drop_ready(it)
             it["status"], it["done_at"] = "на YouTube", time.time()
+            _q_posted.set()  # the loop frees the disk from what is on YouTube now
             _q_say(f"✅ На YouTube: {_q_label(it)}. " + ("Приватное и публиковаться не будет." if it.get("private_only")
                                                        else "Приватное, откроется само в это время."))
         elif up.get("status") == "ошибка" or not info:
@@ -2533,6 +2543,21 @@ def _q_next() -> None:
         return
 
 
+_q_posted = threading.Event()
+
+
+def _q_cleanup_posted() -> None:
+    """Delete by itself what the «Удалить вышедшие на YouTube» button deletes,
+    each time a queue video lands on YouTube (Svetlana asked 11.11.2026)."""
+    if not _q_posted.is_set():
+        return
+    _q_posted.clear()
+    r = cleanup(days=100000.0, posted=True)
+    if r["freed_gb"] > 0:
+        with qlock:
+            _q_say(f"🧹 Удалила с сервера вышедшее на YouTube: освободилось {r['freed_gb']} ГБ, свободно {r['free_gb']} ГБ.")
+
+
 def _queue_loop() -> None:
     while True:
         time.sleep(30)
@@ -2545,6 +2570,7 @@ def _queue_loop() -> None:
                 _q_digest()
                 _q_draft_news()
                 _q_save()
+            _q_cleanup_posted()
             _q_flush()
         except Exception as e:  # never let the loop die; shows on the page
             with qlock:
