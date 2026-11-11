@@ -31,7 +31,7 @@ from starlette.concurrency import run_in_threadpool
 
 from render import drive
 from render.drive import fetch_folder
-from render.breathing import parse_script
+from render.breathing import Breath as _Breath, parse_script
 from render.engine import Breath, Job, RenderSettings, kit_dir, make_check_clips, probe_duration, render
 from render.scripts import DEFAULT, PRESETS
 from render import gdrive, stt, telegram, uploadpost, youtube
@@ -243,6 +243,28 @@ def need_gb(s: RenderSettings, black: bool = False) -> float:
     return (mbit + 0.7) * s.duration / 8000 * 1.1 + 2
 
 
+BREATH_FILE = "breath.json"  # the breathing settings of a test, as the form sent them
+
+
+def _save_breath(folder: Path, breath) -> None:
+    data = {k: v for k, v in asdict(breath).items() if k != "phases"}
+    (folder / BREATH_FILE).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+
+def _load_breath(folder: Path):
+    """The test's breathing settings, or None for a test made before they were kept."""
+    try:
+        data = json.loads((folder / BREATH_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    known = {k: v for k, v in data.items() if k in _Breath.__dataclass_fields__ and k != "phases"}
+    return _Breath(**known)
+
+
+def _is_breathing(src: Path) -> bool:
+    return (src / "voice").is_dir() and any((src / "voice").iterdir())
+
+
 def _black(info: dict) -> bool:
     """Breathing intro + black screen: the video is nearly free."""
     return bool(info["job"].voice or (info.get("drive") or [""] * 6)[5])
@@ -419,6 +441,8 @@ def start_job(
     if problem := space_problem(settings, breathing, queued):
         raise HTTPException(400, problem)
     out = folder / f"{name}_{hours:g}h.mp4"
+    if breathing:  # the queue re-renders the long video from this test with the same breathing
+        _save_breath(folder, breath)
     jobs[job_id] = {"job": Job(visuals, trk, out, settings, ambient=ambient, mask=mask, still=still,
                                voice=voice, breath=breath, intro=intro),
                     "status": "в очереди",
@@ -1894,10 +1918,15 @@ def _q_source(job_id: str) -> Path:
     src = DATA / job_id
     if not (src / "job.json").exists():
         raise HTTPException(400, f"Рендера {job_id} нет на сервере")
+    if _is_breathing(src):
+        if not (src / BREATH_FILE).exists():
+            raise HTTPException(400, f"Проба {job_id} сделана до 11.11.2026 и не хранит настройки дыхания: "
+                                     "сделайте новую пробу (хватит 1–3 минут) или поставьте готовое видео")
+        if not (src / "ambient").is_dir() or not any((src / "ambient").iterdir()):
+            raise HTTPException(400, f"У пробы {job_id} на сервере нет фонового звука")
+        return src
     if not (src / "visual").is_dir() or not any((src / "visual").iterdir()):
         raise HTTPException(400, f"У рендера {job_id} на сервере нет исходных клипов")
-    if (src / "voice").is_dir() and any((src / "voice").iterdir()):
-        raise HTTPException(400, "Ролики с дыханием очередь пока не делает")
     return src
 
 
@@ -2429,6 +2458,9 @@ def _q_start_render(it: dict) -> None:
                     os.link(f, folder / kind / f.name)
                 except OSError:
                     shutil.copy2(f, folder / kind / f.name)
+    breath = _load_breath(src) if _is_breathing(src) else None
+    if breath:
+        shutil.copy2(src / BREATH_FILE, folder / BREATH_FILE)
     found = sorted((folder / "visual").iterdir())
     visuals = [p for p in found if p.suffix.lower() in VIDEO_EXTS] or found
     mask, still = split_mask(sorted((folder / "mask").iterdir()))
@@ -2440,10 +2472,12 @@ def _q_start_render(it: dict) -> None:
         settings.logo_opacity = found_logo[1]["opacity"]
         settings.logo_width = found_logo[1]["width"]
         settings.logo_margin = found_logo[1]["margin"]
-    out = folder / f"{visuals[0].stem}_{it['hours']:g}h.mp4"
+    name = "sleep" if breath else visuals[0].stem
+    out = folder / f"{name}_{it['hours']:g}h.mp4"
+    extra = {"voice": sorted((folder / "voice").iterdir())[0], "breath": breath} if breath else {}
     jobs[job_id] = {"job": Job(visuals, sorted((folder / "tracks").iterdir()), out, settings,
                                ambient=sorted((folder / "ambient").iterdir())[:5], mask=mask, still=still,
-                               intro=sorted((folder / "intro").iterdir())),
+                               intro=sorted((folder / "intro").iterdir()), **extra),
                     "status": "в очереди", "step": "", "progress": 0.0, "created": time.time(),
                     "label": f"Очередь: {it['title']}", "drive": None}
     save_job(job_id, jobs[job_id])
@@ -2591,7 +2625,7 @@ def _q_next() -> None:
         s = RenderSettings(duration=it["hours"] * 3600, video_bitrate=f"{it['bitrate']}M")
         queued = sum(need_gb(i["job"].settings, _black(i)) for i in jobs.values()
                      if i["status"] in ("в очереди", "работает"))
-        if problem := space_problem(s, False, queued):
+        if problem := space_problem(s, _is_breathing(DATA / it["source"]), queued):
             it["note"] = problem
             return
         _q_start_render(it)
