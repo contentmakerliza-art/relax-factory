@@ -746,6 +746,45 @@ def disk():
     return {"free_gb": round(free_gb(), 1), "reserve_gb": RESERVE_GB}
 
 
+@app.get("/disk/usage", dependencies=[Depends(check_api)])
+def disk_usage():
+    """What takes the disk, in GB. Hard-linked files count once, in the first
+    group that holds them (queue, then jobs, then the copies)."""
+    total, used, free = shutil.disk_usage(DATA)
+    seen: set[int] = set()
+
+    def size(folder: Path) -> int:
+        n = 0
+        for f in folder.rglob("*") if folder.is_dir() else []:
+            try:
+                st = f.lstat()
+            except OSError:
+                continue
+            if f.is_file() and st.st_ino not in seen:
+                seen.add(st.st_ino)
+                n += st.st_size
+        return n
+
+    gb = lambda n: round(n / 1e9, 1)
+    groups: dict[str, int] = {"queue": size(QDIR)}
+    rows = []
+    for job_id, info in sorted(jobs.items()):
+        n = size(DATA / job_id)
+        kind = ("в очереди" if job_id in _q_jobs() else "ждёт в боте" if _awaiting(info)
+                else "одобрена" if _approved(info) else "правка" if (info.get("approval") or {}).get("status") == "правка"
+                else "работает" if info["status"] == "работает" else "прочее")
+        groups[f"jobs: {kind}"] = groups.get(f"jobs: {kind}", 0) + n
+        rows.append({"job_id": job_id, "label": _label(info), "kind": kind, "gb": gb(n)})
+    groups["sources copy"] = size(SRCDIR)
+    groups["drive cache"] = size(drive.CACHE)
+    groups["models"] = size(DATA / "models")
+    rest = sum(size(f) if f.is_dir() else 0 for f in DATA.iterdir())
+    groups["other"] = rest
+    rows.sort(key=lambda r: -r["gb"])
+    return {"total_gb": gb(total), "used_gb": gb(used), "free_gb": gb(free),
+            "groups_gb": {k: gb(v) for k, v in groups.items()}, "largest_jobs": rows[:30]}
+
+
 @app.get("/scripts", dependencies=[Depends(check)])
 def scripts():
     return {"default": DEFAULT, "presets": PRESETS}
