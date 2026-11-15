@@ -1110,45 +1110,59 @@ def api_token_off():
 def telegram_state():
     st = telegram.state()
     return {"connected": bool(st.get("token")), "bot": st.get("bot", ""), "chat": bool(st.get("chat_id")),
-            "claude_url": _claude_url()}
+            "coordinator_url": _coordinator_url(), "claude_url": _coordinator_url()}
 
 
 @app.post("/telegram/claude", dependencies=[Depends(check)])
-def telegram_claude(url: str = Form("")):
-    """The chat with Claude that the bot's «Позвать Клода» button opens; {text}
-    in the link is replaced by the ready message. Empty = no button."""
+@app.post("/telegram/coordinator", dependencies=[Depends(check)])
+def telegram_coordinator(url: str = Form("")):
+    """Save the review chat link. An empty value disables the button."""
     url = url.strip()
-    if url and not re.fullmatch(r"https://[^\s<>\"]{4,1000}", url):
-        raise HTTPException(400, "Ссылка должна начинаться с https://")
+    if url and not (COORDINATOR_LINK.fullmatch(url) or re.fullmatch(r"https://[^\s<>\"]{4,1000}", url)):
+        raise HTTPException(400, "Нужна ссылка https:// или codex://threads/…")
     st = telegram.state()
-    st["claude_url"] = url
+    st["coordinator_url"] = url
     telegram.save(st)
-    return {"claude_url": url}
+    return {"coordinator_url": url, "claude_url": url}
 
 
-# the project's main chat, where Claude checks the answers in every channel thread
-CLAUDE_URL = "https://claude.ai/code/project/chan_012LrQ7Bt8DREicJyZMa6Q2t"
-CLAUDE_ASK = "Проверь одобрения"
+COORDINATOR_URL = os.environ.get("RELAX_COORDINATOR_URL", "codex://threads/01a1d97d-7922-78f3-bc63-667c60f60ff0")
+COORDINATOR_LINK = re.compile(r"codex://threads/[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
+REVIEW_REQUEST = "Проверь одобрение"
 
 
-def _claude_url() -> str:
-    """The link set on the card; until one is set, the project chat. Saved empty = no button."""
-    st = telegram.state()
-    return st["claude_url"] if "claude_url" in st else CLAUDE_URL
+def _coordinator_url() -> str:
+    return telegram.state().get("coordinator_url", COORDINATOR_URL)
 
 
-def _claude_button() -> list[list[dict]]:
-    url = _claude_url()
-    return [[{"text": "💬 Позвать Клода", "url": url.replace("{text}", urllib.parse.quote(CLAUDE_ASK))}]] if url else []
+def _coordinator_button() -> list[list[dict]]:
+    url = _coordinator_url()
+    if COORDINATOR_LINK.fullmatch(url):
+        host = os.environ.get("RELAX_HOST", "")
+        url = f"https://{host}/review-chat" if host else ""
+    return [[{"text": "💬 Позвать GPT", "url": url.replace("{text}", urllib.parse.quote(REVIEW_REQUEST))}]] if url else []
+
+
+@app.get("/review-chat", response_class=HTMLResponse, dependencies=[Depends(check)])
+def review_chat():
+    url = _coordinator_url()
+    if not url:
+        raise HTTPException(404, "Чат-координатор не настроен")
+    url = url.replace("{text}", urllib.parse.quote(REVIEW_REQUEST))
+    return ("<!doctype html><html lang='ru'><meta charset='utf-8'>"
+            "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+            "<title>Проверка правок</title><main><h1>Проверка правок</h1>"
+            f'<p><a href="{html.escape(url, quote=True)}">Открыть чат «Координатор»</a></p>'
+            f"<p>Сообщение для чата: <strong>{html.escape(REVIEW_REQUEST)}</strong></p>"
+            "<p>Если ссылка не открылась, в приложении ChatGPT выберите Codex → MacBook → Монетизация → «Создать Sites-приложение для AI-конвейера».</p></main></html>")
 
 
 def _tg_done(text: str, job_id: str, label: str) -> None:
-    """The bot's answer after «Одобряю» or a comment, with a button to the chat
-    with Claude and the message to paste there (a tap on it copies it)."""
+    """Reply with the coordinator link and a copyable review request."""
     st = telegram.state()
     params = {"chat_id": st["chat_id"], "text": text}
-    if button := _claude_button():
-        params["text"] = f"{html.escape(text)}\n\nДля Клода (нажмите, чтобы скопировать):\n<code>{html.escape(CLAUDE_ASK)}</code>"
+    if button := _coordinator_button():
+        params["text"] = f"{html.escape(text)}\n\nДля координатора (нажмите, чтобы скопировать):\n<code>{html.escape(REVIEW_REQUEST)}</code>"
         params["parse_mode"] = "HTML"
         params["reply_markup"] = {"inline_keyboard": button}
     telegram.call("sendMessage", params)
@@ -1195,7 +1209,7 @@ def _tg_worker(job_id: str) -> None:
         caption = f"{_label(info)}\n{job_id} · первая минута"
         telegram.send_video(clip, caption, [[{"text": "✅ Одобряю", "callback_data": f"ok:{job_id}"},
                                              {"text": "✏️ Поправить", "callback_data": f"fix:{job_id}"}]]
-                            + _claude_button())
+                            + _coordinator_button())
         tg.update(status="отправлено", time=time.time())
         if not info.get("approval"):
             info["approval"] = {"status": "ждёт", "time": time.time(), "comments": []}
@@ -1274,6 +1288,9 @@ def _tg_handle(u: dict, st: dict) -> None:
         return
     if chat != st["chat_id"]:
         return  # only her chat
+    if msg and re.fullmatch(r"/gpt(?:@\w+)?", text.strip(), re.IGNORECASE):
+        _tg_done("Чат для проверки одобрений", "", "")
+        return
     if cb:
         telegram.call("answerCallbackQuery", {"callback_query_id": cb["id"]})
         act, _, job_id = (cb.get("data") or "").partition(":")
