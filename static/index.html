@@ -118,6 +118,10 @@
   <div class="card"><h2 style="margin:0 0 6px;font-size:18px">Telegram-бот для проб</h2>
     <div class="muted">Проба приходит в Telegram минутным видео с кнопками «Одобряю» и «Поправить». Одобренную пробу нельзя удалить, её исходники откладываются в папку «Исходники».</div>
     <div id="tg_state" class="muted" style="margin-top:8px"></div>
+    <label for="tg_preview_file">Готовая 30-секундная проба с MacBook</label>
+    <input type="file" id="tg_preview_file" accept=".mp4,video/mp4">
+    <button type="button" onclick="tgImport(this)">Добавить пробу</button>
+    <span id="tg_preview_status" class="muted" role="status"></span>
     <label>Токен бота <span class="hint">из @BotFather; хранится только на сервере</span></label>
     <input type="password" id="tg_token" autocomplete="off" style="width:100%;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--text);font:inherit">
     <button type="button" onclick="tgToken()">Сохранить токен</button>
@@ -709,6 +713,46 @@ async function tgClaude() {
   const r = await fetch('telegram/claude', {method:'POST', body:form});
   document.getElementById('tg_state').textContent = r.ok ? 'Ссылка сохранена' : 'Ошибка: ' + ((await r.json()).detail || r.status);
   if (r.ok) setTimeout(tgLoad, 1500);
+}
+async function uploadJobFiles(id, files, say) {
+  const total = files.reduce((n, [, file]) => n + file.size, 0);
+  let sent = 0;
+  for (const [kind, file] of files) {
+    for (let off = 0; off < file.size || off === 0; off += CHUNK) {
+      const part = file.slice(off, off + CHUNK);
+      const url = `jobs/${id}/files/${kind}/${encodeURIComponent(file.name)}?offset=${off}`;
+      for (let attempt = 1; ; attempt++) {
+        try { await call(url, { method: 'PUT', body: part }); break; }
+        catch (err) {
+          if (attempt >= 5) throw err;
+          say('Связь прервалась, повторяю…');
+          await new Promise(r => setTimeout(r, 3000 * attempt));
+        }
+      }
+      sent += part.size;
+      say('Загружаю файлы: ' + Math.round(sent / (total || 1) * 100) + '%');
+      if (file.size === 0) break;
+    }
+  }
+}
+async function tgImport(button) {
+  const input = document.getElementById('tg_preview_file');
+  const say = text => { document.getElementById('tg_preview_status').textContent = text; };
+  const file = input.files[0];
+  if (!file) { say('Выберите 30-секундный MP4'); return; }
+  button.disabled = true;
+  try {
+    const { id } = await call('jobs/new', { method: 'POST' });
+    await uploadJobFiles(id, [['visual', file]], say);
+    await call(`jobs/${id}/import-preview`, { method: 'POST' });
+    input.value = '';
+    say('Проба в очереди. Откройте её карточку и отправьте на одобрение.');
+    lastJobs = ''; load();
+  } catch (err) {
+    say('Ошибка: ' + err.message);
+  } finally {
+    button.disabled = false;
+  }
 }
 async function tgReset() {
   if (!sure('Следующий, кто напишет боту /start, станет его чатом. Продолжить?')) return;

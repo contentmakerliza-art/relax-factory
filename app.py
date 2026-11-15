@@ -1201,6 +1201,31 @@ def _tg_preview(job: Job) -> Path:
     raise RuntimeError("Превью не помещается в 50 МБ")
 
 
+@app.post("/jobs/{job_id}/import-preview", dependencies=[Depends(check)])
+def import_preview(job_id: str):
+    """Register a 30-second MP4 rendered elsewhere for normal Telegram review."""
+    if job_id in jobs:
+        raise HTTPException(409, "Проба уже зарегистрирована")
+    folder = _job_dir(job_id)
+    files = list((folder / "visual").iterdir())
+    if len(files) != 1 or files[0].suffix.lower() != ".mp4":
+        raise HTTPException(400, "Загрузите одну готовую пробу в MP4")
+    source = files[0]
+    try:
+        lengths = _stream_lengths(source)
+    except (ValueError, TypeError):
+        lengths = {}
+    if any(not 29.95 <= lengths.get(kind, 0) <= 30.05 for kind in ("audio", "video")):
+        raise HTTPException(400, "В пробе должно быть 30 секунд видео и звука")
+    output = folder / source.name
+    source.rename(output)
+    jobs[job_id] = {"job": Job([], [], output, RenderSettings(duration=30)),
+                    "label": source.stem, "status": "готово", "step": "",
+                    "progress": 1.0, "created": time.time()}
+    save_job(job_id, jobs[job_id])
+    return {"id": job_id}
+
+
 def _tg_worker(job_id: str) -> None:
     info = jobs[job_id]
     tg = info["tg"]
