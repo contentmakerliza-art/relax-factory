@@ -1231,7 +1231,9 @@ def _tg_worker(job_id: str) -> None:
     tg = info["tg"]
     try:
         clip = _tg_preview(info["job"])
-        caption = f"{_label(info)}\n{job_id} · первая минута"
+        duration = info["job"].settings.duration
+        preview_note = "проба 30 секунд" if abs(duration - 30) <= 0.05 else "первая минута"
+        caption = f"{_label(info)}\n{job_id} · {preview_note}"
         telegram.send_video(clip, caption, [[{"text": "✅ Одобряю", "callback_data": f"ok:{job_id}"},
                                              {"text": "✏️ Поправить", "callback_data": f"fix:{job_id}"}]]
                             + _coordinator_button())

@@ -116,7 +116,7 @@
   </div>
 
   <div class="card"><h2 style="margin:0 0 6px;font-size:18px">Telegram-бот для проб</h2>
-    <div class="muted">Проба приходит в Telegram минутным видео с кнопками «Одобряю» и «Поправить». Одобренную пробу нельзя удалить, её исходники откладываются в папку «Исходники».</div>
+    <div class="muted">Соберите пробу в режиме «Проба · 30 секунд». После просмотра нажмите «Проверено — отправить в Telegram» в карточке. В Telegram появятся кнопки «Одобряю» и «Поправить». Одобренную пробу нельзя удалить, её исходники откладываются в папку «Исходники».</div>
     <div id="tg_state" class="muted" style="margin-top:8px"></div>
     <label for="tg_preview_file">Готовая 30-секундная проба с MacBook</label>
     <input type="file" id="tg_preview_file" accept=".mp4,video/mp4">
@@ -746,7 +746,7 @@ async function tgImport(button) {
     await uploadJobFiles(id, [['visual', file]], say);
     await call(`jobs/${id}/import-preview`, { method: 'POST' });
     input.value = '';
-    say('Проба в очереди. Откройте её карточку и отправьте на одобрение.');
+    say('Проба в очереди. После проверки отправьте её на одобрение из карточки.');
     lastJobs = ''; load();
   } catch (err) {
     say('Ошибка: ' + err.message);
@@ -767,7 +767,11 @@ function tgLine(j) {
   for (const c of (a && a.comments) || []) out += `<div class="muted">✏️ ${c.text ? esc(c.text) : ''}${c.voice ? ` <a href="jobs/${j.id}/comment/${esc(c.voice)}">голосовое</a>` : ''}</div>`;
   if (t && t.status === 'отправляется') return out + '<div>Telegram: отправляется…</div>';
   if (t && t.status === 'ошибка') out += `<div class="st-ошибка">Telegram: ${esc(t.error)}</div>`;
-  const acts = [tgOn ? `<a href="#" onclick="tgSend('${j.id}');return false">${t ? 'Отправить в Telegram ещё раз' : 'Отправить в Telegram на одобрение'}</a>` : '',
+  const isShortPreview = Math.abs(j.settings.duration - 30) <= 0.05;
+  const sendLabel = t?.status === 'отправлено'
+    ? 'Отправить в Telegram ещё раз'
+    : isShortPreview ? 'Проверено — отправить в Telegram' : 'Отправить в Telegram на одобрение';
+  const acts = [tgOn ? `<a href="#" onclick="tgSend('${j.id}');return false">${sendLabel}</a>` : '',
     !(a && a.status === 'одобрено') ? `<a href="#" onclick="tgApprove('${j.id}');return false">одобрить здесь</a>` : ''].filter(Boolean).join(' · ');
   return out + (acts ? `<div>${acts}</div>` : '');
 }
