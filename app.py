@@ -2774,3 +2774,9 @@ for _source_id, _source_info in list(jobs.items()):
         save_job(_source_id, _source_info)
 
 threading.Thread(target=_repair_imported_sources, daemon=True).start()
+
+
+# Full background audio can be attached independently of the approved preview.
+from background_audio import install as _install_background_audio
+_install_background_audio(app, DATA, jobs, queue_items, qlock, _label, save_job,
+    __import__('render.engine', fromlist=['measure_loudness']).measure_loudness, check)
