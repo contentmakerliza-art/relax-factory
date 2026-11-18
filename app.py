@@ -2766,4 +2766,11 @@ def _repair_imported_sources():
             save_job(source_id, source_info)
     _production_reconcile()
 
+# Sending threads do not survive a container restart. Expose a retry instead
+# of leaving the Telegram button permanently stuck at "sending".
+for _source_id, _source_info in list(jobs.items()):
+    if (_source_info.get("tg") or {}).get("status") == "отправляется" and not _source_info.get("approval"):
+        _source_info["tg"].update(status="ошибка", error="Отправка прервана перезапуском сервера. Повторите отправку.")
+        save_job(_source_id, _source_info)
+
 threading.Thread(target=_repair_imported_sources, daemon=True).start()
