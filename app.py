@@ -29,6 +29,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from starlette.concurrency import run_in_threadpool
 
+from imported_recipe import prepare as _prepare_imported_recipe
 from render import drive
 from render.drive import fetch_folder
 from render.breathing import Breath as _Breath, parse_script
@@ -1223,6 +1224,11 @@ def import_preview(job_id: str):
                     "label": source.stem, "status": "готово", "step": "",
                     "progress": 1.0, "created": time.time()}
     save_job(job_id, jobs[job_id])
+    try:
+        _prepare_imported_recipe(job_id, jobs, DATA, _label, save_job)
+    except Exception as error:
+        jobs[job_id]["recipe_error"] = str(error)[:300]
+        save_job(job_id, jobs[job_id])
     return {"id": job_id}
 
 
@@ -1299,6 +1305,7 @@ def _approve(job_id: str, via: str) -> None:
     ap.pop("sources_error", None)
     info["approval"] = ap
     save_job(job_id, info)
+    globals().get("_production_reconcile", lambda: None)()
     threading.Thread(target=_save_sources, args=(job_id,), daemon=True).start()
     threading.Thread(target=_plan_after_approve, args=(job_id,), daemon=True).start()
 
@@ -2730,3 +2737,33 @@ def youtube_disconnect(channel_id: str):
 @app.get("/", response_class=HTMLResponse, dependencies=[Depends(check)])
 def index():
     return _page("index.html")
+
+
+
+# Durable intake: an approval stays visible even before publication setup is complete.
+from approval_queue import install as _install_approval_queue
+def _production_enqueue(row):
+    actual = _q_channel(row["profile"])
+    normalized = lambda text: text.casefold().replace("café", "cafe").strip()
+    if normalized(actual) != normalized(row["channel"]):
+        raise HTTPException(400, "Профиль подключён к другому каналу: " + actual)
+    return _q_new(row["source"], os.environ.get("RELAX_HOST", "201-51-24-177.sslip.io"),
+        row["title"], row["description"], row["tags"], row["publish_at"], row["profile"],
+        "", None, True, row["hours"], 4, False, False)
+
+_production_reconcile = _install_approval_queue(
+    app, DATA, jobs, queue_items, _source_dir, _label,
+    lambda: datetime.now(MSK), check_api, _production_enqueue)
+
+
+def _repair_imported_sources():
+    for source_id, source_info in list(jobs.items()):
+        try:
+            if _prepare_imported_recipe(source_id, jobs, DATA, _label, save_job) and _approved(source_info):
+                _save_sources(source_id)
+        except Exception as error:
+            source_info["recipe_error"] = str(error)[:300]
+            save_job(source_id, source_info)
+    _production_reconcile()
+
+threading.Thread(target=_repair_imported_sources, daemon=True).start()
