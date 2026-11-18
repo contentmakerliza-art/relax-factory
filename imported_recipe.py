@@ -8,6 +8,14 @@ import hashlib,json,os,random,shutil,subprocess
 from render.engine import measure_loudness
 
 MUSIC_FIRST={
+ # Week 3: start each full album with the track heard in its approved preview.
+ '20261118-161927-4cfb':'11 Wreath on the Door.mp3',
+ '20261118-162034-b4c9':'11 Wreath on the Door.mp3',
+ '20261118-162509-2ad2':'11 Wreath on the Door.mp3',
+ '20261118-162739-85c0':'11 Wreath on the Door.mp3',
+ '20261118-162901-3bae':'13 December Evening Stroll.mp3',
+ '20261118-163143-e8a4':'15 Snow on the Cobblestones.mp3',
+ '20261118-163259-ce35':'19 Fireside Bookshop.mp3',
  '20261117-200404-dda4':'01 First Snow in Montmartre.mp3',
  '20261117-200439-c7e9':'02 First Snow in Montmartre II.mp3',
  '20261117-200506-bf86':'04 Candlelight on Rue Lepic II.mp3',
