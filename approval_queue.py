@@ -75,7 +75,7 @@ class ApprovalQueue:
                 if source in STUDIO:
                     row.update(publish_at=STUDIO[source],status='Уже загружен в YouTube Studio',blocker='',publication_id='studio:'+source)
                 elif source in queued:
-                    q=queued[source];row.update(channel=q.get('channel') or row['channel'],publish_at=q['publish_at'],status='Очередь публикаций: '+q['status'],blocker=q.get('error',''),publication_id=q['id'])
+                    q=queued[source];row.update(channel=q.get('channel') or row['channel'],publish_at=q['publish_at'],hours=q.get('hours',row['hours']),profile=q.get('user',row.get('profile','')),title=q.get('title',row.get('title','')),description=q.get('description',row.get('description','')),tags=', '.join(q.get('tags',[])) if isinstance(q.get('tags'),list) else q.get('tags',''),status='Очередь публикаций: '+q['status'],blocker=q.get('error',''),publication_id=q['id'])
                 elif not row['channel']:row.update(status='Нужно проверить старое одобрение',blocker='Канал не указан в названии; повторно публиковать автоматически нельзя')
                 else:
                     visual=self.source_dir(source,'visual');tracks=self.source_dir(source,'tracks');ambient=self.source_dir(source,'ambient')
