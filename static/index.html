@@ -107,6 +107,12 @@
 
   <div class="card"><h2 style="margin:0 0 6px;font-size:18px">Очередь</h2><div class="muted" style="margin-bottom:6px"><span id="disk"></span> · <a href="#" onclick="cleanup();return false">Удалить старые</a> · <a href="#" onclick="cleanupPosted();return false">Удалить вышедшие на YouTube</a><br><span id="build_folder"></span> · <a href="#" onclick="pickFolder();return false">выбрать папку</a></div><div id="jobs" class="muted">Пока пусто</div></div>
 
+  <div class="card" id="production_queue"><h2 style="margin:0 0 6px;font-size:18px">Одобренные ролики — производственная очередь</h2>
+    <p class="muted">Каждое одобрение из Telegram автоматически попадает сюда. Дата и материалы сохраняются даже при ошибке. Готовая карточка автоматически переходит в очередь публикаций; при нехватке исходников или подключения указана причина.</p>
+    <label>Канал</label><select id="production_filter" onchange="productionDraw()"><option value="">Все каналы</option><option>Little Paris Jazz Cafe</option><option>Quiet Pines Cabin</option><option>Exhale to Sleep</option><option>Mountain View Cafe</option></select>
+    <div id="production_list" style="margin-top:12px">Загрузка…</div>
+    <details style="margin-top:12px"><summary id="production_old_count">Старые одобрения без названия канала</summary><div id="production_old"></div></details>
+  </div>
   <div class="card"><h2 style="margin:0 0 6px;font-size:18px">Очередь роликов на YouTube</h2>
     <div class="muted">Одобренный тестовый рендер + тексты, обложка и время. Сервер сам делает длинное видео примерно за сутки до выхода, проверяет длину, отправляет через Upload-Post и удаляет длинный файл, когда YouTube его принял.</div>
     <div id="q_list" class="muted" style="margin-top:8px">Пока пусто</div>
@@ -192,6 +198,18 @@
     <p class="muted" id="yt_send_msg"></p>
   </form>
 </dialog>
+<dialog id="production_dialog"><form id="production_form" method="dialog">
+<h2>Карточка одобренного выпуска</h2><input name="source" type="hidden">
+<label>Канал</label><select name="channel"><option>Little Paris Jazz Cafe</option><option>Quiet Pines Cabin</option><option>Exhale to Sleep</option><option>Mountain View Cafe</option></select>
+<label>Дата выхода, МСК</label><input name="publish_at" type="datetime-local" required>
+<label>Название на английском</label><input name="title" maxlength="100" required>
+<label>Описание</label><textarea name="description" rows="5"></textarea>
+<label>Теги</label><input name="tags">
+<label>Профиль публикации (пусто — ещё не подключён)</label><input name="profile">
+<label>Длительность, часов</label><input name="hours" type="number" min="0.1" max="12" step="0.1" required>
+<p class="muted">Если исходники и профиль готовы, сохранение автоматически включит выпуск в расписание. При ошибке карточка останется в производственной очереди.</p>
+<button type="button" onclick="productionSave()">Сохранить карточку</button><button type="button" onclick="document.getElementById('production_dialog').close()">Отмена</button><p id="production_error"></p>
+</form></dialog>
 <dialog id="q_dlg">
   <form id="q_form" method="dialog">
     <h2 style="margin:0 0 4px;font-size:18px" id="q_head">Ролик в очередь</h2>
@@ -209,7 +227,8 @@
     <label style="font-weight:400"><input type="checkbox" name="render_now"> Рендерить сразу, не ждать суток до выхода</label>
     <label style="font-weight:400"><input type="checkbox" name="ready"> Готовое длинное видео: отправить как есть, без пересборки (номер выше = номер готового рендера)</label>
     <label style="font-weight:400"><input type="checkbox" name="private_only"> Только приватно (тест): YouTube не опубликует, дата нужна только для расписания</label>
-    <p class="muted">10 часов, 4 Мбит/с, те же клипы, звук и настройки, что в тестовом рендере. Приватное, YouTube сам откроет его в указанное время. Не для детей · «Люди и блоги» · английский.</p>
+    <label>Длина полного ролика, часов</label><input type="number" name="hours" value="3" min="0.1" max="12" step="0.1" required>
+    <p class="muted">Выбранная длина, 4 Мбит/с, те же клипы, звук и настройки, что в тестовом рендере. Приватное, YouTube сам откроет его в указанное время. Не для детей · «Люди и блоги» · английский.</p>
     <button type="button" onclick="qSave()">Сохранить</button>
     <button type="button" onclick="document.getElementById('q_dlg').close()" style="background:var(--line);color:var(--text);margin-top:8px">Отмена</button>
     <p class="muted" id="q_msg"></p>
@@ -817,7 +836,7 @@ function qOpen(id) {
   document.getElementById('q_head').textContent = x ? 'Изменить ролик' : 'Ролик в очередь';
   document.getElementById('q_cover_now').innerHTML = x && x.cover ? `Сейчас: <img src="queue/${x.id}/cover" style="width:96px;vertical-align:middle;border-radius:4px"> (пусто = оставить)` : '';
   if (x) {
-    f.source.value = x.source; f.user.value = x.user; f.publish_at.value = x.publish_at;
+    f.source.value = x.source; f.user.value = x.user; f.publish_at.value = x.publish_at; f.hours.value = x.hours || 3;
     f.title.value = x.title; f.description.value = x.description; f.tags.value = x.tags.join(', ');
     f.synthetic.checked = !!x.synthetic; f.render_now.checked = !!x.render_now; f.private_only.checked = !!x.private_only; f.ready.checked = !!x.ready;
   } else {
@@ -855,6 +874,24 @@ async function qDigest() {
   if (!r.ok) alert('Ошибка: ' + ((await r.json()).detail || r.status));
 }
 fetch('queue/digest').then(r => r.ok && r.json()).then(d => { if (d) document.getElementById('q_digest').value = d.time; });
+
+let productionRows=[];
+async function productionLoad(){
+ try{const r=await fetch('production');if(!r.ok)throw new Error('Не удалось прочитать очередь');productionRows=await r.json();productionDraw();}
+ catch(e){document.getElementById('production_list').textContent='Ошибка чтения очереди. Одобрения остаются в журнале Telegram.';}
+}
+function productionCard(x){return `<div class="job"><b>${esc(x.publish_at?x.publish_at.replace('T',' ')+' МСК':'Дата ещё не назначена')} · ${esc(x.channel||'Нужно определить канал')}</b><div>${esc(x.title||x.label)}</div><div>${esc(x.status)}</div>${x.blocker?`<div class="st-ошибка">${esc(x.blocker)}</div>`:''}<div class="muted">${esc(x.source)} · ${esc(String(x.hours))} ч · <a href="jobs/${encodeURIComponent(x.source)}/video?watch=1">Проба</a> · <a href="#" onclick="productionOpen('${x.source}');return false">Карточка выпуска</a></div></div>`;}
+function productionDraw(){
+ const channel=document.getElementById('production_filter').value;
+ const known=productionRows.filter(x=>x.channel&&(!channel||x.channel===channel));
+ document.getElementById('production_list').innerHTML=known.map(productionCard).join('')||'Одобренных роликов этого канала пока нет';
+ const old=productionRows.filter(x=>!x.channel);document.getElementById('production_old_count').textContent=`Старые одобрения: требуется определить канал (${old.length})`;document.getElementById('production_old').innerHTML=old.map(productionCard).join('');
+}
+function productionOpen(source){const x=productionRows.find(x=>x.source===source),f=document.getElementById('production_form');for(const key of ['source','channel','publish_at','title','description','tags','profile','hours'])f.elements[key].value=x[key]||'';document.getElementById('production_error').textContent='';document.getElementById('production_dialog').showModal();}
+async function productionSave(){const f=document.getElementById('production_form');if(!f.reportValidity())return;const r=await fetch('production/'+encodeURIComponent(f.source.value)+'/plan',{method:'POST',body:new FormData(f)});if(!r.ok){document.getElementById('production_error').textContent=(await r.json()).detail||'Не удалось сохранить';return;}document.getElementById('production_dialog').close();await productionLoad();qText='';qLoad();}
+productionLoad();setInterval(productionLoad,15000);
+
 </script>
 </body>
 </html>
+
