@@ -3,7 +3,7 @@
 No approval changes, generation, final renders or automatic replacement of inputs.
 Promotion uses the existing guarded publisher as a separate step.
 """
-import hashlib,json,os,subprocess
+import argparse,hashlib,json,os,subprocess
 from pathlib import Path
 
 ROOT=Path('/opt/relax-codex');DATA=Path('/var/lib/relax-factory')
@@ -15,17 +15,18 @@ def run(args,timeout=180):
 
 def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
 
-def media(path,args):
-    return run(['docker','exec','relax-factory',*args[:1],*args[1:]])
-
 def container_path(path):return '/data/'+str(path.relative_to(DATA))
 
-def main():
-    rows=[json.loads(s) for s in (ROOT/'paris-backlog-audio-check.jsonl').read_text().splitlines() if s]
-    if len(rows)!=9 or len({r['job_id'] for r in rows})!=9:raise ValueError('Incomplete identity check')
+def main(tallinn_only=False):
+    batch=ROOT/'assets/little-paris-tallinn-20261121' if tallinn_only else BATCH
+    report='tallinn-audio-check.jsonl' if tallinn_only else 'paris-backlog-audio-check.jsonl'
+    rows=[json.loads(s) for s in (ROOT/report).read_text().splitlines() if s]
+    count=1 if tallinn_only else 9
+    if len(rows)!=count or len({r['job_id'] for r in rows})!=count:raise ValueError('Incomplete identity check')
+    if tallinn_only and rows[0]['job_id']!='20261119-181826-3a91':raise ValueError('Unexpected waiting source')
     catalog={r['name']:r for r in json.loads((POOL/'catalog.json').read_text())}
     plans=json.loads((DATA/'approved-production-queue.json').read_text())
-    BATCH.mkdir(exist_ok=True)
+    batch.mkdir(exist_ok=True)
     # Validate the complete album once. Original approved excerpts use tracks 11..20.
     names=sorted(n for n in catalog if 11<=int(n.split(' ',1)[0])<=20)
     if len(names)!=10:raise ValueError('Full album incomplete')
@@ -39,10 +40,12 @@ def main():
         tracks[name]={'seconds':seconds,'sha256':catalog[name]['sha256']}
     for row in sorted(rows,key=lambda r:r['date']):
         jid=row['job_id'];folder=DATA/jid;meta=json.loads((folder/'job.json').read_text())
-        if (meta.get('approval',{}).get('status')!='одобрено' or meta.get('status')!='готово'
-                or meta['label']!=row['label'] or plans[jid]['publish_at']!=row['date']):
+        allowed=('одобрено','ждёт') if tallinn_only else ('одобрено',)
+        planned=plans.get(jid,{}).get('publish_at','2026-12-15T22:00' if tallinn_only else '')
+        if (meta.get('approval',{}).get('status') not in allowed or meta.get('status')!='готово'
+                or meta['label']!=row['label'] or planned!=row['date']):
             raise ValueError('Current decision or reserved date changed')
-        if not '2026-12-06'<=row['date'][:10]<='2026-12-14':raise ValueError('Unexpected date')
+        if not '2026-12-06'<=row['date'][:10]<=('2026-12-15' if tallinn_only else '2026-12-14'):raise ValueError('Unexpected date')
         first=row['matches'][0][1]
         if (row['matches'][0][0]<.985 or row['matches'][0][0]-row['matches'][1][0]<.2
                 or first not in tracks):raise ValueError('Ambiguous original music')
@@ -68,7 +71,7 @@ def main():
                 and abs(float(probe['format']['duration'])-30)<.15):raise ValueError('Unexpected preview format')
         run(['docker','exec','relax-factory','ffmpeg','-v','error','-nostdin','-threads','2',
              '-i',container_path(source),'-f','null','-'])
-        cover=BATCH/(jid+'-cover.jpg')
+        cover=batch/(jid+'-cover.jpg')
         run(['docker','exec','relax-factory','ffmpeg','-v','error','-nostdin','-y','-ss','2',
              '-i',container_path(source),'-frames:v','1','-threads','1','/tmp/'+cover.name])
         run(['docker','cp','relax-factory:/tmp/'+cover.name,str(cover)])
@@ -91,7 +94,9 @@ def main():
             if json.loads(target.read_text())!=manifest:raise ValueError('Existing manifest differs')
         else:
             with target.open('x') as f:json.dump(manifest,f,ensure_ascii=False,indent=2)
-        (BATCH/(jid+'-validated.json')).write_text(json.dumps(manifest,ensure_ascii=False,indent=2))
+        (batch/(jid+'-validated.json')).write_text(json.dumps(manifest,ensure_ascii=False,indent=2))
         print(json.dumps({'prepared':jid,'date':row['date'],'first_track':first},ensure_ascii=False),flush=True)
 
-if __name__=='__main__':main()
+if __name__=='__main__':
+    p=argparse.ArgumentParser();p.add_argument('--tallinn-only',action='store_true')
+    main(p.parse_args().tallinn_only)
