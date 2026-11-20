@@ -44,6 +44,10 @@ def main(request_id):
         'few plausible reflections. REJECT any visible defect, give concrete evidence in Russian. '
         'Otherwise NEEDS_MOTION_REVIEW: samples do not prove smooth motion, transitions or audio. '
         'Do not invent defects or assume prior attempt failed.')
+    if request_id.startswith('cabin18-'):
+        prompt += (' Owner specifically rejected a bright window-shaped reflection in the fireplace and repeated cat movement. '
+                   'Reject any visible window-shaped rectangle/reflection inside the firebox even if it was present in the source image. '
+                   'Compare head angle, ear position and chin placement across the sequence; minute breathing must not move head or paws.')
     cmd=['systemd-run','--unit=relax-qc-'+request_id,'--collect','--wait','--pipe',
          '-p','User=relax-codex','-p','WorkingDirectory='+str(workspace),'-p','MemoryMax=512M',
          '-p','CPUQuota=25%','-p','RuntimeMaxSec=180','--setenv=HOME=/var/lib/relax-codex',
