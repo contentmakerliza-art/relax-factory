@@ -46,12 +46,14 @@ def promote(job_id):
     config=json.loads(manifest.read_text())
     current=json.loads((Path('/var/lib/relax-factory')/job_id/'job.json').read_text())
     if (current.get('approval') or {}).get('status')!='одобрено':return None
-    for source,target in [
+    inputs=[
         (ROOT/'publish-approved-card.py','/tmp/publish-approved-card.py'),
         (ROOT/'prepare-publication.py','/tmp/prepare-publication.py'),
-        (ROOT/'assets/cabin-approved-fireplace-9.wav','/tmp/cabin-full-fireplace-9.wav'),
         (Path(config['cover_path']),'/tmp/codex-cover-'+job_id+'.jpg'),
-        (manifest,'/tmp/codex-manifest-'+job_id+'.json')]:
+        (manifest,'/tmp/codex-manifest-'+job_id+'.json')]
+    if config['profile']=='Quiet_Pines':
+        inputs.append((ROOT/'assets/cabin-approved-fireplace-9.wav','/tmp/cabin-full-fireplace-9.wav'))
+    for source,target in inputs:
         subprocess.run(['docker','cp',str(source),'relax-factory:'+target],check=True,capture_output=True)
     record={'state':'publication_submission_uncertain','job_id':job_id,'created':time.time()}
     receipt.write_text(json.dumps(record))

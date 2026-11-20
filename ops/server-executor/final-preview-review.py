@@ -1,5 +1,5 @@
 """Automated visual prescreen of a complete 30-second owner preview, not approval."""
-import argparse,json,os,pwd,shutil,subprocess,re
+import argparse,json,os,pwd,shutil,subprocess,re,time
 from pathlib import Path
 
 
@@ -8,15 +8,23 @@ def run(args,**kw):
                           stdin=subprocess.DEVNULL,**kw)
 
 
-def main(rid):
-    if not re.fullmatch(r'cabin(?:08|22)-(?:fullframe|clean)-v(?:[1-9]|1[0-2])-20261120',rid):raise ValueError('Unsupported preview')
+def main(rid,recheck=False):
+    if not re.fullmatch(r'cabin(?:08|22)-(?:fullframe|clean)-v(?:[1-9]|1[0-8])-20261120',rid):raise ValueError('Unsupported preview')
     root=Path('/opt/relax-codex/assets')/rid
     result=root/'final-preview-qc.json'
-    if result.exists():return json.loads(result.read_text())
+    if result.exists():
+        if not recheck:return json.loads(result.read_text())
+        history=root/'qa-history';history.mkdir(exist_ok=True)
+        shutil.copy2(result,history/f'final-preview-before-native-snow-{time.time_ns()}.json')
     prefix='/tmp/'+rid
+    # Factory updates clear /tmp; the durable preview is the source of truth.
+    run(['docker','exec','relax-factory','mkdir','-p',prefix])
+    run(['docker','cp',str(root/'preview.mp4'),'relax-factory:'+prefix+'/preview.mp4'])
     crop='700:380:50:340' if rid.startswith('cabin08-') else '650:360:90:350'
+    snow_crop='960:480:0:160' if rid.startswith('cabin08-') else '840:500:1080:180'
     filters={'preview-contact':'fps=2/3,scale=640:-1,tile=5x4',
-             'preview-detail':'fps=2,scale=1280:720,crop='+crop+',scale=300:-1,tile=6x10'}
+             'preview-detail':'fps=2,scale=1280:720,crop='+crop+',scale=300:-1,tile=6x10',
+             'preview-snow':'fps=1/5,crop='+snow_crop+',tile=2x3'}
     for name,f in filters.items():
         run(['docker','exec','relax-factory','ffmpeg','-nostdin','-v','error','-y','-threads','1',
              '-i',prefix+'/preview.mp4','-vf',f,'-frames:v','1','-threads','1',prefix+'/'+name+'.jpg'])
@@ -32,6 +40,10 @@ def main(rid):
     (w/'schema.json').write_text(json.dumps(schema))
     prompt=('Do not use tools. These are chronological samples of the actual 30-second preview. '
         'First image: 20 whole-frame samples, five columns. Second: 60 fireplace/cat closeups, six columns. '
+        'Third: six window crops at native pixel scale in two columns, at 0, 5, 10, 15, 20, 25 seconds. '
+        'Use the native window crops to judge fine snow, not only the reduced whole-frame sheet. '
+        'Do not call snow absent merely because tiny flakes disappear after downscaling; '
+        'reject if the detailed samples show no visible falling snow. '
         'Reject obvious snow indoors, window-shaped reflections in the firebox, double/inserted hearth, '
         'moving fireplace structure, distorted furniture, waking/moving cat, moving head ears paws tail, '
         'camera movement, ghosted shapes or rhythmic seam jumps. Fine snow must visibly fall outside '
@@ -46,10 +58,12 @@ def main(rid):
         '--setenv=CODEX_HOME=/var/lib/relax-codex/.codex',
         '/opt/relax-codex/release-0.171.0/bin/codex','exec','--ephemeral','--skip-git-repo-check',
         '--sandbox','read-only','--image',str(w/'preview-contact.jpg'),'--image',str(w/'preview-detail.jpg'),
+        '--image',str(w/'preview-snow.jpg'),
         '--output-schema',str(w/'schema.json'),'-o',str(w/'qc.json'),prompt],timeout=210)
     value=json.loads((w/'qc.json').read_text());result.write_text(json.dumps(value,ensure_ascii=False,indent=2))
     return value
 
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser();p.add_argument('request_id');print(json.dumps(main(p.parse_args().request_id),ensure_ascii=False))
+    p=argparse.ArgumentParser();p.add_argument('request_id');p.add_argument('--recheck',action='store_true')
+    a=p.parse_args();print(json.dumps(main(a.request_id,a.recheck),ensure_ascii=False))
