@@ -12,7 +12,7 @@ from playwright.sync_api import sync_playwright
 
 
 def main(request_id):
-    if not re.fullmatch(r'cabin(?:08|22)-fullframe-v(?:[1-9]|1[0-2])-20261120', request_id):
+    if not re.fullmatch(r'cabin(?:08|22)-fullframe-v(?:[1-9]|1[0-8])-20261120', request_id):
         raise ValueError('Unsupported prepared result')
     ledger = Path('/state') / ('runway-' + request_id + '.json')
     with browser_lease():

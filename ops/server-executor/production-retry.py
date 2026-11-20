@@ -17,6 +17,23 @@ ROOT = Path('/opt/relax-codex')
 DOWNLOADS = Path('/opt/marketplace-analytics/studio-downloads')
 STATE = Path('/opt/marketplace-analytics/studio-state')
 MAX_ATTEMPTS = 3
+DEFAULT_MODEL = 'Gen-4 Turbo'
+
+
+def model_failures(model):
+    """Count confirmed technical failures since this model's last real result."""
+    known = []
+    for path in STATE.glob('runway-*.json'):
+        try:
+            value = read(path)
+            if value.get('model') == model:
+                known.append(value)
+        except (OSError, ValueError):
+            continue
+    success = max((v.get('created', 0) for v in known if v.get('state') in
+                   ('downloaded_needs_qc', 'generated_needs_download')), default=0)
+    return sum(v.get('state') == 'generation_failed' and v.get('created', 0) > success
+               for v in known)
 
 
 def run(args, timeout=3600):
@@ -39,9 +56,9 @@ def main(config_path):
         raise ValueError('At most two paid new images per staged run')
     for source in config['sources']:
         ids = source['attempts']
-        if len(ids) != 3 or len(set(ids)) != 3:
-            raise ValueError('Exactly three distinct attempts per image required')
-        if any(not re.fullmatch(r'cabin(?:08|22)-fullframe-v(?:[1-9]|1[0-2])-20261120', x) for x in ids):
+        if not 3 <= len(ids) <= 6 or len(set(ids)) != len(ids):
+            raise ValueError('Stage 3–6 unique submission IDs; at most three completed videos per image')
+        if any(not re.fullmatch(r'cabin(?:08|22)-fullframe-v(?:[1-9]|1[0-8])-20261120', x) for x in ids):
             raise ValueError('Unsupported staged attempt')
     all_ids = [i for s in config['sources'] for i in s['attempts']]
     if len(all_ids) != len(set(all_ids)):
@@ -121,7 +138,12 @@ def work(config, folder):
         if digest in hashes:
             raise ValueError('Identical image cannot reset the three-attempt counter')
         hashes.add(digest)
-        for attempt, request_id in enumerate(source['attempts'], 1):
+        completed = 0
+        model = source.get('model', DEFAULT_MODEL)
+        for slot, request_id in enumerate(source['attempts'], 1):
+            if completed >= MAX_ATTEMPTS:
+                break
+            attempt = completed + 1
             ledger = STATE / ('runway-' + request_id + '.json')
             generation = read(ledger)
             pipeline = ROOT / 'assets' / request_id / 'pipeline.json'
@@ -146,20 +168,26 @@ def work(config, folder):
                      preview=prior['preview'], owner_approval=False)
                 return
             if prior and prior['stage'] in ('rejected', 'rejected_motion', 'rejected_preview'):
+                completed += 1
                 if salvage(request_id):return
                 continue
             if generation and generation['state'] == 'generation_failed':
                 continue
             if not generation:
-                request = dict(request_id=request_id, source=str(local), prompt=source['runway_prompt'])
-                if source.get('model'):
-                    request['model']=source['model']
+                failures = model_failures(model)
+                if failures >= 2:
+                    save('model_unavailable_no_retry', model=model, technical_failures=failures,
+                         completed_video_attempts=completed, source_sha256=digest,
+                         reason='Two consecutive confirmed technical failures; keep image and switch work')
+                    return
+                request = dict(request_id=request_id, source=str(local), prompt=source['runway_prompt'], model=model)
                 request_path = DOWNLOADS / (request_id + '-request.json')
                 if request_path.exists() and read(request_path) != request:
                     raise ValueError('Existing staged request differs')
                 request_path.write_text(json.dumps(request))
                 save('generating_video', request_id=request_id, image_number=image_number,
-                     attempt=attempt, source_sha256=digest, maximum_attempts=3)
+                     attempt=attempt, submission_slot=slot, source_sha256=digest,
+                     maximum_attempts=3, model=model)
                 try:
                     run(['docker', 'exec', 'marketplace-syntx-studio', 'python',
                          '/app/runway_prepare.py', '--request', '/downloads/' + request_path.name,
@@ -178,6 +206,8 @@ def work(config, folder):
                              request_id=request_id)
                         return
                 generation = read(ledger)
+            if generation and generation['state'] == 'generation_failed':
+                continue
             if generation['state'] == 'generated_needs_download':
                 spec = importlib.util.spec_from_file_location('follow', ROOT / 'follow-generation.py')
                 follow = importlib.util.module_from_spec(spec)
@@ -205,6 +235,7 @@ def work(config, folder):
             run(['/usr/bin/python3', str(ROOT / 'pipeline-one.py'), request_id], timeout=900)
             checked = read(pipeline)
             if checked['stage'] in ('rejected', 'rejected_motion', 'rejected_preview'):
+                completed += 1
                 if salvage(request_id):return
                 continue
             if checked['stage'] == 'held_for_motion_and_audio_review':
@@ -212,6 +243,11 @@ def work(config, folder):
                      preview=checked['preview'], owner_approval=False)
                 return
             save('technical_attention_required', request_id=request_id, pipeline=checked)
+            return
+        if completed < MAX_ATTEMPTS:
+            save('submission_slots_exhausted_no_image_purchase', image_number=image_number,
+                 completed_video_attempts=completed,
+                 reason='Technical failures do not consume the three-video image budget')
             return
         save('three_attempts_exhausted_changing_image', image_number=image_number)
     save('prepared_source_pool_exhausted', maximum_new_image_cost_tokens=image_budget,

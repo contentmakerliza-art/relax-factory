@@ -10,7 +10,7 @@ from motion_policy import VERSION, moving_regions
 
 
 def main(request_id):
-    if not re.fullmatch('cabin(?:08|17|18|22)-(?:fullframe|clean)-v(?:[1-9]|1[0-2])-20261120',request_id):
+    if not re.fullmatch('cabin(?:08|17|18|22)-(?:fullframe|clean)-v(?:[1-9]|1[0-8])-20261120',request_id):
         raise ValueError('Pilot accepts only explicitly staged Cabin attempts')
     folder=Path('/opt/relax-codex/assets')/request_id;folder.mkdir(exist_ok=True)
     lock=(folder/'pipeline.lock').open('w');fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)

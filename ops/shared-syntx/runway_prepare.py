@@ -9,7 +9,7 @@ from snow_policy import compose as compose_snow
 from playwright.sync_api import sync_playwright
 
 
-def prepare(source, prompt, *, submit=False, request_id=None, model_name='Gen-4.5 Image to Video'):
+def prepare(source, prompt, *, submit=False, request_id=None, model_name='Gen-4 Turbo'):
     original_prompt = prompt
     prompt, snow_policy_version = compose_snow(prompt, request_id)
     if model_name not in ('Gen-4.5 Image to Video','Gen-4 Turbo','Gen-4'):
@@ -157,4 +157,4 @@ if __name__ == '__main__':
     request = json.loads(Path(args.request).read_text())
     print(json.dumps(prepare(request.get('source', '/downloads/cabin-17-source.jpg'), request['prompt'],
                              submit=args.submit, request_id=request.get('request_id', 'cabin17-fullframe-v1-20261120'),
-                             model_name=request.get('model','Gen-4.5 Image to Video'))))
+                             model_name=request.get('model','Gen-4 Turbo'))))

@@ -29,7 +29,7 @@ def recover_download(request_id, ledger, record):
 
 
 def main(request_id):
-    if not re.fullmatch('cabin(?:08|17|18|22)-fullframe-v(?:[1-9]|1[0-2])-20261120',request_id):
+    if not re.fullmatch('cabin(?:08|17|18|22)-fullframe-v(?:[1-9]|1[0-8])-20261120',request_id):
         raise ValueError('Unsupported pilot')
     ledger=Path('/opt/marketplace-analytics/studio-state')/('runway-'+request_id+'.json')
     deadline=time.monotonic()+780

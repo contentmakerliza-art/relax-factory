@@ -81,7 +81,7 @@ if __name__=='__main__':
     mode.add_argument('--register-only',action='store_true')
     mode.add_argument('--send-registered',action='store_true')
     args=parser.parse_args()
-    if not re.fullmatch(r'cabin(?:08|17|18|22)-(?:fullframe|clean)-v(?:[1-9]|1[0-2])-20261120',args.request_id):
+    if not re.fullmatch(r'cabin(?:08|17|18|22)-(?:fullframe|clean)-v(?:[1-9]|1[0-8])-20261120',args.request_id):
         raise ValueError('Unsupported pilot request')
     if not 10<=len(args.label)<=180 or not args.label.startswith('Quiet Pines Cabin — '):
         raise ValueError('Invalid label')

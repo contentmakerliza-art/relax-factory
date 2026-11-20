@@ -66,6 +66,7 @@ def finish(group,folder):
     while time.monotonic()<deadline:
         state=read(folder/'state.json') or {}
         if state.get('stage') in ('prepared_source_pool_exhausted','provider_unavailable_no_image_purchase',
+            'model_unavailable_no_retry','submission_slots_exhausted_no_image_purchase',
             'technical_attention_required','preparation_failed_no_submission','recover_existing_video','recover_existing_image'):
             # A producer launched asynchronously alongside us may not have
             # replaced its prior terminal state yet. Give it startup time.
