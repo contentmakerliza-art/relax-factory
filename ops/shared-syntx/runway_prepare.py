@@ -5,10 +5,13 @@ import re
 import time
 from pathlib import Path
 from browser_lease import browser_lease
+from snow_policy import compose as compose_snow
 from playwright.sync_api import sync_playwright
 
 
 def prepare(source, prompt, *, submit=False, request_id=None, model_name='Gen-4.5 Image to Video'):
+    original_prompt = prompt
+    prompt, snow_policy_version = compose_snow(prompt, request_id)
     if model_name not in ('Gen-4.5 Image to Video','Gen-4 Turbo','Gen-4'):
         raise ValueError('Only explicitly supported image-to-video models are allowed')
     source = Path(source).resolve()
@@ -76,7 +79,9 @@ def prepare(source, prompt, *, submit=False, request_id=None, model_name='Gen-4.
                 if submit:
                     before = page.locator('video source').evaluate_all('(es)=>es.map(e=>e.src)')
                     record = {'request_id': request_id, 'state': 'submission_uncertain',
-                              'prompt': prompt, 'source': source.name, 'created': time.time(),
+                              'prompt': prompt, 'original_prompt': original_prompt,
+                              'snow_policy_version': snow_policy_version,
+                              'source': source.name, 'created': time.time(),
                               'model': model_name, 'seconds': 10, 'cost_tokens': 0}
                     # Persist BEFORE clicking. Even a crash cannot trigger an automatic retry.
                     with ledger.open('x') as handle:
