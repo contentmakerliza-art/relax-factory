@@ -1,5 +1,5 @@
 [Unit]
-Description=Process new Relax Factory decisions (planning only)
+Description=Process decisions and queue prepared approved releases
 After=relax-codex-intake.service
 [Service]
 Type=oneshot

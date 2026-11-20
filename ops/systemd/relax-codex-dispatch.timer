@@ -1,6 +1,7 @@
 [Unit]
 Description=Dispatch new Relax Factory decisions without idle AI requests
 [Timer]
+AccuracySec=1s
 OnBootSec=90
 OnUnitInactiveSec=60
 Unit=relax-codex-dispatch.service

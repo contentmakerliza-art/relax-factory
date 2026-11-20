@@ -1,6 +1,7 @@
 [Unit]
 Description=Save new Relax Factory decisions without calling AI
 [Timer]
+AccuracySec=1s
 OnBootSec=60
 OnUnitInactiveSec=60
 Unit=relax-codex-intake.service
