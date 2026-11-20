@@ -1,0 +1,17 @@
+[Unit]
+Description=Relax Factory approval intake (no AI or production actions)
+ConditionPathIsDirectory=/var/lib/relax-factory
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/relax-codex/approval-bridge.py
+StateDirectory=relax-codex-bridge
+StateDirectoryMode=0700
+UMask=0077
+MemoryMax=64M
+CPUQuota=5%
+TimeoutStartSec=30
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+NoNewPrivileges=yes

@@ -1,0 +1,4 @@
+forced_login_method = "chatgpt"
+cli_auth_credentials_store = "file"
+approval_policy = "never"
+sandbox_mode = "read-only"

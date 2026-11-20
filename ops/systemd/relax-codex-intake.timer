@@ -1,0 +1,8 @@
+[Unit]
+Description=Save new Relax Factory decisions without calling AI
+[Timer]
+OnBootSec=60
+OnUnitInactiveSec=60
+Unit=relax-codex-intake.service
+[Install]
+WantedBy=timers.target

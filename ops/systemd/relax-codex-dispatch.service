@@ -1,0 +1,10 @@
+[Unit]
+Description=Process new Relax Factory decisions (planning only)
+After=relax-codex-intake.service
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/relax-codex/dispatch-decisions.py
+MemoryMax=128M
+CPUQuota=10%
+TimeoutStartSec=240
+UMask=0077
