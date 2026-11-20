@@ -26,7 +26,7 @@ def main(request=None):
     if request is not None:
         if set(request)!={'request_id','source','prompt'}:
             raise ValueError('Unexpected edit request fields')
-        if not re.fullmatch(r'cabin(?:08|18)-source-edit-v[1-3]-20261120',request['request_id']):
+        if not re.fullmatch(r'cabin(?:08|18|22)-source-(?:edit|new)-v[1-3]-20261120',request['request_id']):
             raise ValueError('Unsupported edit request ID')
         source=Path(request['source']).resolve()
         if source.parent!=Path('/downloads') or not source.is_file():

@@ -28,7 +28,9 @@ def prepare(source, prompt, *, submit=False, request_id=None):
             if len(browser.contexts) != 1 or len(browser.contexts[0].pages) != 1:
                 raise RuntimeError('Expected exactly one existing SYNTX tab')
             page = browser.contexts[0].pages[0]
-            page.set_viewport_size({'width':1920,'height':1080})
+            # Compact layout exposes the model button used below. At 1920px
+            # SYNTX moves those controls into a different settings sidebar.
+            page.set_viewport_size({'width':1280,'height':900})
             original = page.url
             if not original.startswith('https://syntx.ai/'):
                 raise RuntimeError('Unexpected browser page')
@@ -39,8 +41,9 @@ def prepare(source, prompt, *, submit=False, request_id=None):
                 textarea.wait_for(state='visible', timeout=45000)
                 if page.get_by_role('dialog', name='Параметры изображения').is_visible():
                     raise RuntimeError('Unfinished reference from earlier operation; inspect first')
-                page.locator('[data-cy="ai-select-menu-btn"]').click()
                 model = page.locator('[data-cy="ai-model-select-dropdown-menu"]')
+                if not model.is_visible():
+                    page.locator('[data-cy="ai-select-menu-btn"]').click()
                 model.locator('.el-select__wrapper').click()
                 page.locator('[data-cy="ai-model-Gen-4.5 Image to Video"]').click()
                 # Selecting a model closes the menu; do not click a hidden confirm button.
@@ -79,13 +82,14 @@ def prepare(source, prompt, *, submit=False, request_id=None):
                     ledger.write_text(json.dumps(record))
                     page.wait_for_function(
                         'old=>[...document.querySelectorAll("video source")].some(e=>e.src && !old.includes(e.src))',
-                        arg=before, timeout=480000)
+                        arg=before, timeout=660000)
                     urls = page.locator('video source').evaluate_all('(es)=>es.map(e=>e.src)')
                     new = [url for url in urls if url and url not in before]
                     if len(new) != 1:
                         raise RuntimeError('Ambiguous video result; inspect history, never resubmit')
                     record.update(state='generated_needs_download', video_url=new[0], chat_url=page.url)
                     ledger.write_text(json.dumps(record))
+                    page.set_viewport_size({'width':1920,'height':1080})
                     target_video = None
                     for video in page.locator('video').all():
                         if video.locator('source').get_attribute('src') == new[0]:
@@ -105,6 +109,18 @@ def prepare(source, prompt, *, submit=False, request_id=None):
                     return {'submitted': True, 'state': record['state'], 'request_id': request_id}
                 return {'prepared': True, 'submitted': False, 'cost_tokens': 0,
                         'model': 'Gen-4.5 Image to Video', 'seconds': 10, 'ratio': '16:9'}
+            except Exception:
+                if submit and ledger and ledger.exists():
+                    saved = json.loads(ledger.read_text())
+                    if saved.get('state') == 'submitted':
+                        saved['chat_url'] = page.url
+                        body = page.locator('body').inner_text(timeout=5000)
+                        if prompt in body and 'Request timed out - please try again' in body:
+                            saved.update(state='generation_failed', error='Explicit SYNTX timeout')
+                        else:
+                            saved.update(state='submitted_needs_inspection', error='Result not confirmed; never resubmit blindly')
+                        ledger.write_text(json.dumps(saved))
+                raise
             finally:
                 page.goto(original, wait_until='domcontentloaded')
 

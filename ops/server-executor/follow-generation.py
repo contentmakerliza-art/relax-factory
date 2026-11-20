@@ -29,7 +29,7 @@ def recover_download(request_id, ledger, record):
 
 
 def main(request_id):
-    if not re.fullmatch('cabin(?:08|17|18|22)-fullframe-v[1-3]-20261120',request_id):
+    if not re.fullmatch('cabin(?:08|17|18|22)-fullframe-v[1-9]-20261120',request_id):
         raise ValueError('Unsupported pilot')
     ledger=Path('/opt/marketplace-analytics/studio-state')/('runway-'+request_id+'.json')
     deadline=time.monotonic()+780
@@ -46,7 +46,7 @@ def main(request_id):
             subprocess.run(['/usr/bin/python3','/opt/relax-codex/pipeline-one.py',request_id],
                            check=True,timeout=600)
             return
-        if state in ('qc_rejected','submission_uncertain'):
+        if state in ('qc_rejected','submission_uncertain','submitted_needs_inspection','generation_failed'):
             raise RuntimeError('Inspection required; never retry generation')
         time.sleep(5)
     raise TimeoutError('Generation wait expired; no retry or new generation submitted')

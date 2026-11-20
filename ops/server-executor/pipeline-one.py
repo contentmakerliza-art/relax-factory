@@ -9,8 +9,8 @@ import time
 
 
 def main(request_id):
-    if not re.fullmatch('cabin(?:08|17|18|22)-fullframe-v[1-3]-20261120',request_id):
-        raise ValueError('Pilot accepts only bounded Cabin 17/18 attempts')
+    if not re.fullmatch('cabin(?:08|17|18|22)-fullframe-v[1-9]-20261120',request_id):
+        raise ValueError('Pilot accepts only explicitly staged Cabin attempts')
     folder=Path('/opt/relax-codex/assets')/request_id;folder.mkdir(exist_ok=True)
     lock=(folder/'pipeline.lock').open('w');fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
     statefile=folder/'pipeline.json'
