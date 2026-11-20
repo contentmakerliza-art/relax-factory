@@ -48,16 +48,15 @@ def main():
         latest=json.loads((folder/'job.json').read_text())
         if (latest['approval']['status']!='одобрено' or hashlib.sha256(output.read_bytes()).hexdigest()!=digest
                 or latest['settings']['loop_crossfade']!=0):raise ValueError('Source changed during preparation')
-        cover=Path('/tmp')/(jid+'-backlog-cover.jpg')
-        subprocess.run(['ffmpeg','-v','error','-nostdin','-y','-ss','2','-i',str(output),
-                        '-frames:v','1','-threads','1',str(cover)],check=True,capture_output=True,timeout=90)
-        record=dict(state='queue_submission_uncertain',job_id=jid,publish_at=when,
+        record=dict(state='checking_automatic_publication',job_id=jid,publish_at=when,
             preview_sha256=digest,full_audio_sha256=expected,created=time.time(),
             recipe='Preserve owner-approved chain loop, no new masks, exact preview unchanged')
         ledger.write_text(json.dumps(record,indent=2))
-        result=call('/queue','POST',dict(source=jid,title=title,description=description,tags=tags,
-            publish_at=when,user='Quiet_Pines',hours='3',bitrate='4',synthetic='true',draft='false',render_now='false'),
-            ('cover_file',cover,'image/jpeg'))
+        # The plan endpoint invokes the factory's own ready handler synchronously.
+        # Never issue another POST /queue after that handler has queued the source.
+        candidates=[r for r in call('/queue') if r.get('source')==jid]
+        if len(candidates)!=1:raise ValueError('Automatic publication requires inspection; do not duplicate')
+        result=candidates[0]
         if result.get('status')!='ждёт' or result.get('publish_at')!=when:raise ValueError('Queue submission requires inspection')
         record.update(state='queued',publication=result);ledger.write_text(json.dumps(record,ensure_ascii=False,indent=2))
         print(json.dumps({'queued':jid,'date':when,'publication_id':result['id']},ensure_ascii=False),flush=True)
