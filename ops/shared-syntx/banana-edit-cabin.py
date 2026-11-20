@@ -8,10 +8,10 @@ from browser_lease import browser_lease
 from playwright.sync_api import sync_playwright
 
 
-def main():
+def main(request=None):
     source=Path('/downloads/cabin-18-source.jpg')
     ledger=Path('/state/cabin18-reflection-edit-v1.json')
-    if ledger.exists():
+    if request is None and ledger.exists():
         print(json.dumps({'existing':json.loads(ledger.read_text())}));return
     prompt=('Edit the attached image as the actual target. Preserve the same camera, room, '
         'stone chimney outline, black fireplace frame, wood furniture, green chair, gray chair, '
@@ -22,11 +22,26 @@ def main():
         'The same ginger cat sleeps tightly curled on the gray chair with its chin resting '
         'on its paws, eyes closed and relaxed ears. Preserve its natural anatomy and scale. '
         'No snow or particles inside the room. Photorealistic, same wide 16:9 composition.')
+    output_name='cabin18-no-reflection-v1'
+    if request is not None:
+        if set(request)!={'request_id','source','prompt'}:
+            raise ValueError('Unexpected edit request fields')
+        if not re.fullmatch(r'cabin(?:08|18)-source-edit-v[1-3]-20261120',request['request_id']):
+            raise ValueError('Unsupported edit request ID')
+        source=Path(request['source']).resolve()
+        if source.parent!=Path('/downloads') or not source.is_file():
+            raise ValueError('Expected a staged source image')
+        prompt=request['prompt']
+        if not isinstance(prompt,str) or not 1<=len(prompt)<=4000:raise ValueError('Invalid prompt')
+        ledger=Path('/state')/(request['request_id']+'.json')
+        if ledger.exists():
+            print(json.dumps({'existing':json.loads(ledger.read_text())}));return
+        output_name=request['request_id']
     with browser_lease():
         with sync_playwright() as p:
             b=p.chromium.connect_over_cdp('http://127.0.0.1:9222',artifacts_dir='/downloads')
             if len(b.contexts)!=1 or len(b.contexts[0].pages)!=1:raise ValueError('Unexpected browser session')
-            page=b.contexts[0].pages[0];page.set_default_timeout(20000)
+            page=b.contexts[0].pages[0];page.set_viewport_size({'width':1920,'height':1080});page.set_default_timeout(20000)
             page.goto('https://syntx.ai/ru/image/banana',wait_until='domcontentloaded')
             field=page.get_by_placeholder('Напишите ваш промпт...',exact=True);field.wait_for(state='visible',timeout=45000)
             model=page.locator('[data-cy="ai-model-select-dropdown-menu"]')
@@ -57,10 +72,13 @@ def main():
             with page.expect_download(timeout=60000) as info:message.locator('[data-cy="download-file-btn"]').click()
             suffix=Path(info.value.suggested_filename).suffix.lower()
             if suffix not in ('.jpg','.png','.webp','.jpeg'):raise ValueError('Invalid image download')
-            target=Path('/downloads')/('cabin18-no-reflection-v1'+suffix)
+            target=Path('/downloads')/(output_name+suffix)
             info.value.save_as(str(target))
             record.update(state='downloaded_needs_qc',file=str(target));ledger.write_text(json.dumps(record))
             print(json.dumps({'state':record['state'],'file':str(target),'cost_tokens':cost}))
 
 
-if __name__=='__main__':main()
+if __name__=='__main__':
+    import argparse
+    parser=argparse.ArgumentParser();parser.add_argument('--request')
+    args=parser.parse_args();main(json.loads(Path(args.request).read_text()) if args.request else None)

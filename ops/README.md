@@ -1,20 +1,55 @@
-# Server code backup — 20 November 2026
+# Серверный исполнитель Relax Factory
 
-The factory source at the root matches deployed commit 1e1f8b42958acb6671b45c5eaf7c693970514f74. This branch is a backup and must not be deployed automatically or merged blindly into main.
+Актуально на 20 ноября 2026. Рабочая установка: `/opt/relax-codex` на сервере.
+Codex CLI 0.171.0 установлен официальным нативным бинарным выпуском и вошёл
+через ChatGPT Pro. Docker bootstrap (`setup.sh`, `control.sh`, `Dockerfile`,
+`compose.yml`) — старый неиспользованный вариант, не инструкция переустановки.
 
-- ops/server-executor: on-demand Codex planning, review, preview and delivery helpers. Several pilot helpers deliberately accept only Cabin 17/18 and contain fixed pilot identifiers. They are not a finished general production worker.
-- ops/shared-syntx: browser adapters used at /opt/marketplace-analytics/studio. browser_lease.py serializes access to the one SYNTX browser. Preserve the other project's jobs and browser profile when deploying changes.
-- ops/systemd: intake and planning timers. Empty scans do not call the model. A new text correction can invoke one Codex planning call. General automatic video correction remains incomplete.
+## Что уже работает без MacBook
 
-## Restore outline
+- `relax-codex-intake.timer` читает журнал Telegram примерно раз в минуту.
+  Проверка без новых событий не вызывает модель и не расходует лимиты GPT.
+- `relax-codex-dispatch.timer` принимает новые решения, сохраняет уникальную
+  версию события и вызывает планирование только для новой текстовой правки.
+- Для одобренной пробы с проверенным паспортом публикации в
+  `/opt/relax-codex/publication-manifests/` создаётся активная очередь с точной
+  датой. Пример: проба `20261120-150523-44c3` поставлена на 18 декабря 22:00 МСК,
+  публикация `f53b4fda`. Повторный запуск не создаёт дубликат и повторное уведомление.
+- Фабрика начинает трёхчасовую сборку за 24 часа до публикации. После проверки
+  отправляет файл в Upload-Post для отложенной публикации. Дополнительное
+  подтверждение после одобрения конкретной пробы не требуется.
+- Отдельно запущенные задания Runway продолжают ожидание, скачивание,
+  проверку кадров и сборку 30-секундной пробы на сервере.
 
-1. Restore the factory source from this branch into a review checkout; compare with current production before deploying. Existing deploy/autoupdate.sh follows main, not this branch.
-2. Install official Codex CLI 0.171.0 for the server architecture at /opt/relax-codex/release-0.171.0/bin/codex. Verify official release checksum. Create dedicated relax-codex user/home /var/lib/relax-codex and workspace there. Authenticate afresh with the owner's ChatGPT account; do not copy credentials from GitHub.
-3. Copy ops/server-executor Python files to /opt/relax-codex. Copy shared browser adapters only after comparing the existing marketplace studio and confirming no active generation. The adapters require the existing Playwright studio container, one authorized SYNTX browser and its shared /state and /downloads mounts. Chromium memory limit was increased to 1280 MiB, combined memory+swap 1536 MiB after confirmed OOM failures.
-4. Restore service definitions after checking every path and dependency. Start with read-only login and journal tests. Do not enable a generation worker merely because the files exist.
-5. Restore operational state and media separately from their protected backups: factory data, SQLite task history, approved source clips, 109.032-second fireplace 9 audio, recipes and review evidence. These are intentionally absent from GitHub. Code-only recovery cannot recreate lost media or owner approvals.
-6. Perform one full 30-second pilot with sound through owner approval in Telegram before enabling production. Never repeat a submitted/uncertain generation blindly. Runway requires displayed price 0; no fireplace masks or inserts. Preserve exact approved versions. Approved publication jobs should enter the active dated queue without a second owner confirmation; render lead time is 24 hours.
+## Что ещё требует координатора
 
-The active services have read-only/plain-text planning and intake safeguards, but full motion/audio judgment and general multi-scene correction orchestration still need completion. A successful image-sample check does not certify full video playback or listening.
+Произвольная новая правка пока автоматически превращается в план, а не в
+гарантированно исправленный ролик. Подбор исходника, запуск нужного адаптера,
+проверка спорных движений и разрешение отправки новой пробы остаются отдельными
+операциями. Отсутствие проверенного паспорта публикации означает остановку
+перед очередью, а не разрешение придумать дату или параметры.
 
-Credentials, .env, browser profiles, authentication state, task databases, owner comments and media are excluded. Reconstruct credentials and server-specific settings separately through authorized setup.
+## Ограничения и сохранность
+
+Для Cabin используется только полный кадр Runway: никаких масок, вставок
+чужого камина, искусственного движения кота или снега поверх интерьера.
+Отражение окна внутри топки — брак даже в исходной картинке. Кот спит;
+голова, уши, лапы и хвост неподвижны. Снег — только за окнами.
+Для следующих сцен Runway исходник 10 секунд (максимум проверенного режима: 5, 8, 10 секунд; 12 сейчас нет). По возможности сохранять 8–10 секунд чистого движения. Не спасать брак трёхсекундной зацикленной петлёй; допустима обрезка краёв нормального длинного исходника.
+Runway запускается только при отображаемой цене 0 токенов. Редактирование
+исходной картинки — обычная Nano Banana, максимум 3 токена за изображение.
+Перед отправкой обязательны техническая и визуальная проверки. Проверка
+отдельных кадров и корреляция аудио не доказывают качество всего движения и звука.
+Неоднозначный ответ генератора или публикации запрещает слепой повтор.
+
+Медиа и рецепты хранятся в `/opt/relax-codex/assets/`, независимо от очистки
+фабрики. Одобренные сцены Cabin на 17 и 18 декабря дополнительно сохранены
+полными ZIP-архивами на Google Диске. Код сохраняется в ветке
+`backup/server-code`; основной веткой управляет автоматическое развёртывание.
+Не добавлять в GitHub ключи, auth.json, cookies, приватные состояния и медиа.
+Еженедельное резервирование через автоматизацию приложения зависит от
+доступности Codex; это не отдельная серверная служба резервирования.
+
+Пути состояния: `/var/lib/relax-codex-bridge/tasks.sqlite`,
+`/opt/relax-codex/publication-receipts/`, `/var/lib/relax-factory/`.
+Файлы рецептов и квитанций проверять перед любым повтором записи.

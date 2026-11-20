@@ -28,6 +28,13 @@ def main(request_id):
     proc=subprocess.Popen(['ffmpeg','-nostdin','-v','error','-i',str(path),'-vf','fps=8,scale=1280:720',
                            '-pix_fmt','gray','-threads','1','-f','rawvideo','-'],stdout=subprocess.PIPE)
     regions={'head':(805,496,94,70),'paws':(833,552,95,30),'wall':(160,20,100,100)}
+    if request_id.startswith('cabin22-'):
+        regions={'head':(228,568,80,65),'paws':(242,625,65,24),'wall':(370,30,100,100)}
+    if request_id.startswith('cabin08-'):
+        regions={'head':(520,484,85,62),'paws':(562,526,75,28),'wall':(135,15,100,100)}
+    regions['flank']=(900,510,70,45)
+    if request_id.startswith('cabin22-'):regions['flank']=(150,580,70,50)
+    if request_id.startswith('cabin08-'):regions['flank']=(583,490,60,40)
     templates={};positions={k:[] for k in regions}
     while True:
         raw=bytearray()
@@ -42,6 +49,7 @@ def main(request_id):
             if name not in templates:templates[name]=feature(frame[y:y+h,x:x+w])
             positions[name].append(locate(templates[name],frame[y-3:y+h+3,x-3:x+w+3]))
     if proc.wait()!=0:raise ValueError('Decode failed')
+    (path.parent/'motion-traces.json').write_text(json.dumps({'sample_rate':8,'regions':regions,'positions':positions}))
     report={}
     for name,items in positions.items():
         a=np.asarray(items)

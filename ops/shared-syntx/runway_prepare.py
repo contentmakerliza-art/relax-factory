@@ -28,6 +28,7 @@ def prepare(source, prompt, *, submit=False, request_id=None):
             if len(browser.contexts) != 1 or len(browser.contexts[0].pages) != 1:
                 raise RuntimeError('Expected exactly one existing SYNTX tab')
             page = browser.contexts[0].pages[0]
+            page.set_viewport_size({'width':1920,'height':1080})
             original = page.url
             if not original.startswith('https://syntx.ai/'):
                 raise RuntimeError('Unexpected browser page')
