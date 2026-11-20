@@ -9,7 +9,7 @@ def run(args,**kw):
 
 
 def main(rid):
-    if not re.fullmatch(r'cabin(?:08|22)-(?:fullframe|clean)-v[1-9]-20261120',rid):raise ValueError('Unsupported preview')
+    if not re.fullmatch(r'cabin(?:08|22)-(?:fullframe|clean)-v(?:[1-9]|1[0-2])-20261120',rid):raise ValueError('Unsupported preview')
     root=Path('/opt/relax-codex/assets')/rid
     result=root/'final-preview-qc.json'
     if result.exists():return json.loads(result.read_text())

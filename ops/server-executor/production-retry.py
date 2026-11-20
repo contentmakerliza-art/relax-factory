@@ -35,11 +35,13 @@ def main(config_path):
     job = config['request_group']
     if not re.fullmatch(r'cabin(?:08|22)-retry-20261120', job):
         raise ValueError('Unsupported production group')
+    if sum(bool(s.get('new_image_request')) for s in config['sources'])>2:
+        raise ValueError('At most two paid new images per staged run')
     for source in config['sources']:
         ids = source['attempts']
         if len(ids) != 3 or len(set(ids)) != 3:
             raise ValueError('Exactly three distinct attempts per image required')
-        if any(not re.fullmatch(r'cabin(?:08|22)-fullframe-v[1-9]-20261120', x) for x in ids):
+        if any(not re.fullmatch(r'cabin(?:08|22)-fullframe-v(?:[1-9]|1[0-2])-20261120', x) for x in ids):
             raise ValueError('Unsupported staged attempt')
     all_ids = [i for s in config['sources'] for i in s['attempts']]
     if len(all_ids) != len(set(all_ids)):
@@ -68,8 +70,10 @@ def work(config, folder):
                  owner_approval=False)
             return True
         return False
+    image_budget=3*sum(bool(s.get('new_image_request')) for s in config['sources'])
     hashes = set()
     for index, source in enumerate(config['sources']):
+        image_number=source.get('image_number',index+1)
         if source.get('new_image_request'):
             edit = read(Path(source['new_image_request']))
             ledger = STATE / (edit['request_id'] + '.json')
@@ -90,14 +94,14 @@ def work(config, folder):
                     save('provider_unavailable_no_image_purchase',
                          reason='Two technical failures since last successful video; source quality is not the cause')
                     return
-                save('generating_new_source', image_number=index + 1,
+                save('generating_new_source', image_number=image_number,
                      maximum_image_cost_tokens=3)
                 run(['docker', 'exec', 'marketplace-syntx-studio', 'python',
                      '/app/banana-edit-cabin.py', '--request',
                      '/downloads/' + Path(source['new_image_request']).name])
             result = read(ledger)
             if not result or result.get('state') != 'downloaded_needs_qc':
-                save('recover_existing_image', image_number=index + 1)
+                save('recover_existing_image', image_number=image_number)
                 return
             local = Path(result['file'])
         else:
@@ -105,7 +109,7 @@ def work(config, folder):
         if local.parent != Path('/downloads') or not (DOWNLOADS / local.name).is_file():
             raise ValueError('Expected a staged source image')
         if source.get('new_image_request'):
-            save('checking_new_source', image_number=index + 1)
+            save('checking_new_source', image_number=image_number)
             checked_source = json.loads(run(['/usr/bin/python3', str(ROOT / 'source-review.py'),
                 str(DOWNLOADS / local.name), edit['request_id']], timeout=240).stdout)
             if checked_source['verdict'] == 'REJECT':
@@ -154,7 +158,7 @@ def work(config, folder):
                 if request_path.exists() and read(request_path) != request:
                     raise ValueError('Existing staged request differs')
                 request_path.write_text(json.dumps(request))
-                save('generating_video', request_id=request_id, image_number=index + 1,
+                save('generating_video', request_id=request_id, image_number=image_number,
                      attempt=attempt, source_sha256=digest, maximum_attempts=3)
                 try:
                     run(['docker', 'exec', 'marketplace-syntx-studio', 'python',
@@ -196,7 +200,7 @@ def work(config, folder):
             assets.mkdir(parents=True, exist_ok=True)
             (assets / 'production-source.json').write_text(json.dumps(dict(
                 source_image=str(local), source_sha256=digest, attempt=attempt,
-                image_number=index + 1, group=job), indent=2))
+                image_number=image_number, group=job), indent=2))
             save('checking_video', request_id=request_id)
             run(['/usr/bin/python3', str(ROOT / 'pipeline-one.py'), request_id], timeout=900)
             checked = read(pipeline)
@@ -209,8 +213,8 @@ def work(config, folder):
                 return
             save('technical_attention_required', request_id=request_id, pipeline=checked)
             return
-        save('three_attempts_exhausted_changing_image', image_number=index + 1)
-    save('prepared_source_pool_exhausted', maximum_new_image_cost_tokens=6,
+        save('three_attempts_exhausted_changing_image', image_number=image_number)
+    save('prepared_source_pool_exhausted', maximum_new_image_cost_tokens=image_budget,
          action='Continue with a freshly prepared source pool; never publish rejected media')
 
 

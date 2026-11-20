@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import re
 import subprocess
+from motion_policy import VERSION, LIMITS
 
 ROOT=Path('/opt/relax-codex')
 DOWNLOADS=Path('/opt/marketplace-analytics/studio-downloads')
@@ -19,7 +20,7 @@ def run(args,timeout=900):
 
 
 def main(request_id):
-    if not re.fullmatch(r'cabin(?:08|22)-fullframe-v[1-9]-20261120',request_id):
+    if not re.fullmatch(r'cabin(?:08|22)-fullframe-v(?:[1-9]|1[0-2])-20261120',request_id):
         raise ValueError('Unsupported parent')
     parent=ROOT/'assets'/request_id
     report=parent/'long-segment.json'
@@ -29,8 +30,9 @@ def main(request_id):
             current=json.loads((ROOT/'assets'/cached['request_id']/'pipeline.json').read_text())
             if current['stage']!='held_for_motion_and_audio_review':
                 return dict(state='trim_rejected_after_final_review',pipeline=current)
-        return cached
+        if cached.get('motion_policy_version')==VERSION or cached.get('state')=='preview_ready':return cached
     def save(**data):
+        data['motion_policy_version']=VERSION
         report.write_text(json.dumps(data,ensure_ascii=False,indent=2));return data
     source=DOWNLOADS/(request_id+'.mp4')
     if not source.is_file():return save(state='no_downloaded_parent')
@@ -46,9 +48,9 @@ def main(request_id):
             # A match pinned against the search boundary can falsely look still.
             if any(abs(v[0])>=2.75 or abs(v[1])>=2.75 or v[2]>1000
                    for values in regions.values() for v in values[start:end]):continue
-            drift=max(max(v[i] for v in values[start:end])-min(v[i] for v in values[start:end])
-                      for values in regions.values() for i in (0,1))
-            if drift<=1 and (best is None or end-start>best[1]-best[0]):best=(start,end)
+            valid=all(max(v[i] for v in values[start:end])-min(v[i] for v in values[start:end])<=LIMITS[name]
+                      for name,values in regions.items() for i in (0,1))
+            if valid and (best is None or end-start>best[1]-best[0]):best=(start,end)
     if best is None:return save(state='no_clean_eight_second_segment')
     start,end=best
     if end-start>n-rate/2:return save(state='no_localized_motion_defect_to_trim')

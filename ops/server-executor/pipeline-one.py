@@ -6,10 +6,11 @@ from pathlib import Path
 import re
 import subprocess
 import time
+from motion_policy import VERSION, moving_regions
 
 
 def main(request_id):
-    if not re.fullmatch('cabin(?:08|17|18|22)-(?:fullframe|clean)-v[1-9]-20261120',request_id):
+    if not re.fullmatch('cabin(?:08|17|18|22)-(?:fullframe|clean)-v(?:[1-9]|1[0-2])-20261120',request_id):
         raise ValueError('Pilot accepts only explicitly staged Cabin attempts')
     folder=Path('/opt/relax-codex/assets')/request_id;folder.mkdir(exist_ok=True)
     lock=(folder/'pipeline.lock').open('w');fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
@@ -18,7 +19,7 @@ def main(request_id):
         print(json.dumps({'held':'Later full-preview QC rejected this version'}));return
     def save(stage,**details):
         tmp=folder/'pipeline.tmp';tmp.write_text(json.dumps({'request_id':request_id,'stage':stage,
-             'updated':time.time(),**details},ensure_ascii=False,indent=2));tmp.replace(statefile)
+             'updated':time.time(),'motion_policy_version':VERSION,**details},ensure_ascii=False,indent=2));tmp.replace(statefile)
     def execute(script):
         return subprocess.run(['/usr/bin/python3','/opt/relax-codex/'+script,request_id],
             capture_output=True,text=True,check=True,timeout=600)
@@ -47,7 +48,7 @@ def main(request_id):
                 result=subprocess.run(['docker','exec','relax-factory','python','/tmp/head-motion.py',request_id],check=True,capture_output=True,text=True,timeout=90)
                 motion_path.write_text(json.dumps(json.loads(result.stdout),indent=2))
             motion=json.loads(motion_path.read_text())
-            moving=[name for name in ('head','paws','wall','flank') if max(motion[name]['x_range_pixels'],motion[name]['y_range_pixels'])>1.0]
+            moving=moving_regions(motion)
             if moving:
                 save('rejected_motion',moving_regions=moving,metrics=motion);return
         preview=folder/'preview.mp4'

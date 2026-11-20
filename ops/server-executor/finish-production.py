@@ -3,6 +3,7 @@ No owner approval or long render. Idle waits do not call a model.
 """
 import argparse,fcntl,hashlib,json,re,subprocess,time
 from pathlib import Path
+from motion_policy import VERSION, moving_regions
 
 ROOT=Path('/opt/relax-codex')
 DATA=Path('/var/lib/relax-factory')
@@ -89,11 +90,11 @@ def finish(group,folder):
         motion=json.loads(run(['docker','exec','relax-factory','python','/tmp/head-motion.py',rid,
                               '--filename','preview.mp4'],timeout=180).stdout)
         (assets/'preview-head-motion.json').write_text(json.dumps(motion,indent=2))
-        moving=[k for k in ('head','paws','wall','flank') if max(motion[k]['x_range_pixels'],motion[k]['y_range_pixels'])>1]
+        moving=moving_regions(motion)
         defects=[]
         if not media['technical_screen_passed'] or media['max_adjacent_frame_difference']>5:
             defects.append('Technical frame/audio screen failed')
-        if moving:defects.append('Preview displacement over one pixel: '+', '.join(moving))
+        if moving:defects.append('Preview displacement beyond region-specific limits: '+', '.join(moving))
         if not defects:
             visual=json.loads(run(['/usr/bin/python3',str(ROOT/'final-preview-review.py'),rid],timeout=300).stdout)
             if visual['verdict']!='READY_FOR_OWNER_PREVIEW':defects+=visual['defects'] or ['Visual prescreen rejected']
@@ -111,6 +112,7 @@ def finish(group,folder):
              '-i',prefix+'/preview.mp4','-frames:v','1','-threads','1',prefix+'/cover.jpg'])
         run(['docker','cp','relax-factory:'+prefix+'/cover.jpg',str(assets/'cover.jpg')])
         ready=dict(ready_for_owner_review=True,review_type='automated_test_prescreen',
+            motion_policy_version=VERSION,
             full_frame_only=True,local_masks=False,decoded_frames=media['frames'],
             audio_correlation=media['audio_correlation'],approved_audio_source=str(audio),
             real_time_playback_performed=False,listening_performed=False,
