@@ -58,6 +58,16 @@ def work(config, folder):
         tmp.write_text(json.dumps(dict(stage=stage, updated=time.time(), **details),
                                   ensure_ascii=False, indent=2))
         tmp.replace(folder / 'state.json')
+    def salvage(request_id):
+        save('looking_for_long_clean_segment', request_id=request_id)
+        result = json.loads(run(['/usr/bin/python3', str(ROOT / 'try-long-segment.py'),
+                                 request_id], timeout=900).stdout)
+        if result['state'] == 'preview_ready':
+            save('preview_ready_for_final_checks', request_id=result['request_id'],
+                 preview=result['preview'], parent_request_id=request_id,
+                 owner_approval=False)
+            return True
+        return False
     hashes = set()
     for index, source in enumerate(config['sources']):
         if source.get('new_image_request'):
@@ -97,6 +107,7 @@ def work(config, folder):
             pipeline = ROOT / 'assets' / request_id / 'pipeline.json'
             prior = read(pipeline)
             if prior and prior['stage'] in ('rejected', 'rejected_motion'):
+                if salvage(request_id):return
                 continue
             if generation and generation['state'] == 'generation_failed':
                 continue
@@ -116,11 +127,15 @@ def work(config, folder):
                     generation = read(ledger)
                     if generation and generation['state'] == 'generation_failed':
                         continue
-                    (folder / (request_id + '-preparation-error.txt')).write_text(
-                        (getattr(error, 'stderr', '') or str(type(error).__name__))[-4000:])
-                    save('recover_existing_video' if generation else 'preparation_failed_no_submission',
-                         request_id=request_id)
-                    return
+                    if generation and generation['state'] == 'generated_needs_download':
+                        # The generation succeeded: resume below, never buy another.
+                        pass
+                    else:
+                        (folder / (request_id + '-preparation-error.txt')).write_text(
+                            (getattr(error, 'stderr', '') or str(type(error).__name__))[-4000:])
+                        save('recover_existing_video' if generation else 'preparation_failed_no_submission',
+                             request_id=request_id)
+                        return
                 generation = read(ledger)
             if generation['state'] == 'generated_needs_download':
                 spec = importlib.util.spec_from_file_location('follow', ROOT / 'follow-generation.py')
@@ -128,12 +143,20 @@ def work(config, folder):
                 spec.loader.exec_module(follow)
                 follow.recover_download(request_id, ledger, generation)
                 generation = read(ledger)
+                if generation['state'] == 'generated_needs_download':
+                    try:
+                        run(['docker', 'exec', 'marketplace-syntx-studio', 'python',
+                             '/app/retry-download.py', request_id], timeout=240)
+                    except subprocess.SubprocessError:
+                        # The UI may have saved the real file despite a client error.
+                        follow.recover_download(request_id, ledger, read(ledger))
+                    generation = read(ledger)
             if generation['state'] != 'downloaded_needs_qc':
                 save('recover_existing_video', request_id=request_id)
                 return
             # Preserve source provenance independently of factory cleanup.
             assets = ROOT / 'assets' / request_id
-            assets.mkdir(exist_ok=True)
+            assets.mkdir(parents=True, exist_ok=True)
             (assets / 'production-source.json').write_text(json.dumps(dict(
                 source_image=str(local), source_sha256=digest, attempt=attempt,
                 image_number=index + 1, group=job), indent=2))
@@ -141,6 +164,7 @@ def work(config, folder):
             run(['/usr/bin/python3', str(ROOT / 'pipeline-one.py'), request_id], timeout=900)
             checked = read(pipeline)
             if checked['stage'] in ('rejected', 'rejected_motion'):
+                if salvage(request_id):return
                 continue
             if checked['stage'] == 'held_for_motion_and_audio_review':
                 save('preview_ready_for_final_checks', request_id=request_id,

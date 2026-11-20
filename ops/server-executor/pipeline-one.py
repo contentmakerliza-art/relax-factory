@@ -9,7 +9,7 @@ import time
 
 
 def main(request_id):
-    if not re.fullmatch('cabin(?:08|17|18|22)-fullframe-v[1-9]-20261120',request_id):
+    if not re.fullmatch('cabin(?:08|17|18|22)-(?:fullframe|clean)-v[1-9]-20261120',request_id):
         raise ValueError('Pilot accepts only explicitly staged Cabin attempts')
     folder=Path('/opt/relax-codex/assets')/request_id;folder.mkdir(exist_ok=True)
     lock=(folder/'pipeline.lock').open('w');fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
@@ -20,7 +20,7 @@ def main(request_id):
     def execute(script):
         return subprocess.run(['/usr/bin/python3','/opt/relax-codex/'+script,request_id],
             capture_output=True,text=True,check=True,timeout=600)
-    ledger=Path('/opt/marketplace-analytics/studio-state')/('runway-'+request_id+'.json')
+    ledger=Path('/opt/marketplace-analytics/studio-state')/(('derived-' if '-clean-' in request_id else 'runway-')+request_id+'.json')
     if not ledger.exists():
         save('needs_explicit_generation_request');return
     record=json.loads(ledger.read_text())

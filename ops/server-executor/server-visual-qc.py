@@ -19,8 +19,15 @@ def main(request_id):
     prefix='/tmp/'+request_id
     run('docker','exec','relax-factory','mkdir','-p',prefix)
     run('docker','cp',str(source),'relax-factory:'+prefix+'/source.mp4')
-    for name,filter_string in [('contact','fps=2,scale=640:-1,tile=5x4'),
-                               ('frame5','select=eq(n\\,120)')]:
+    probe=json.loads(run('docker','exec','relax-factory','ffprobe','-v','error',
+                         '-select_streams','v:0','-show_entries','stream=duration,r_frame_rate',
+                         '-of','json',prefix+'/source.mp4'))['streams'][0]
+    duration=float(probe['duration'])
+    if not 7.99 <= duration <= 10.2:raise ValueError('Source must retain at least eight seconds')
+    n,d=probe['r_frame_rate'].split('/');fps=float(n)/float(d)
+    middle=int(duration*fps/2)
+    for name,filter_string in [('contact',f'fps={20/duration:.8f},trim=end_frame=20,scale=640:-1,tile=5x4'),
+                               ('frame5',f'select=eq(n\\,{middle})')]:
         run('docker','exec','relax-factory','ffmpeg','-v','error','-y','-i',prefix+'/source.mp4',
             '-vf',filter_string,'-frames:v','1',prefix+'/'+name+'.png')
         run('docker','cp','relax-factory:'+prefix+'/'+name+'.png',str(root/(name+'.png')))
@@ -37,7 +44,8 @@ def main(request_id):
     (workspace/'schema.json').write_text(json.dumps(schema))
     output=workspace/'qc.json'
     prompt=('Do not use tools. Review the actual full video samples: first image is chronological '
-        'frames at 0.5 second intervals in 5 columns, second full frame at 5 seconds. '
+        f'20 evenly spaced frames spanning {duration:.3f} seconds in 5 columns, '
+        f'second full frame near {duration/2:.3f} seconds. '
         'Rules: noticeable snowfall only OUTSIDE behind window glass, no indoor specks; '
         'cat asleep, fixed head ears paws tail, barely perceptible breathing; no camera movement, '
         'rigid room and fireplace structure, no inserts or overlays, natural existing flames, '

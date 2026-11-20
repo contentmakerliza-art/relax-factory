@@ -2,6 +2,7 @@ import importlib.util
 import json
 from pathlib import Path
 import tempfile
+import shutil
 import unittest
 from unittest.mock import patch
 
@@ -48,6 +49,8 @@ class ProductionRetryTests(unittest.TestCase):
                     rid=args[-1];p=retry.ROOT / 'assets' / rid
                     outcome={'stage':'rejected'} if '-v4-' in rid else {'stage':'held_for_motion_and_audio_review','preview':'checked.mp4'}
                     (p / 'pipeline.json').write_text(json.dumps(outcome))
+                elif str(retry.ROOT / 'try-long-segment.py') in args:
+                    return type('Result', (), {'stdout': json.dumps({'state':'no_clean_eight_second_segment'})})()
                 return type('Result', (), {'stdout': '{}'})()
             with patch.object(retry, 'run', side_effect=fake):
                 retry.main(path)
@@ -68,6 +71,28 @@ class ProductionRetryTests(unittest.TestCase):
                 run.assert_not_called()
             state=json.loads((retry.ROOT/'production-runs/cabin08-retry-20261120/state.json').read_text())
             self.assertEqual(state['stage'],'recover_existing_video')
+
+    def test_ready_video_download_failure_recovers_without_regeneration(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config,path=self.setup_files(Path(tmp))
+            shutil.copyfile(Path(__file__).with_name('follow-generation.py'),retry.ROOT/'follow-generation.py')
+            rid=config['sources'][0]['attempts'][0]
+            ledger=retry.STATE/('runway-'+rid+'.json')
+            ledger.write_text(json.dumps({'state':'generated_needs_download',
+                'video_url':'https://r2.syntx.ai/generated/test-result.mp4'}))
+            calls=[]
+            def fake(args,**kwargs):
+                calls.append(args)
+                if '/app/retry-download.py' in args:
+                    ledger.write_text(json.dumps({'state':'downloaded_needs_qc'}))
+                elif str(retry.ROOT/'pipeline-one.py') in args:
+                    p=retry.ROOT/'assets'/rid/'pipeline.json'
+                    p.write_text(json.dumps({'stage':'held_for_motion_and_audio_review','preview':'checked.mp4'}))
+                else:self.fail('Unexpected generation or paid action: '+str(args))
+                return type('Result',(),{'stdout':'{}'})()
+            with patch.object(retry,'run',side_effect=fake):retry.main(path)
+            self.assertEqual(len([x for x in calls if '/app/retry-download.py' in x]),1)
+            self.assertFalse(any('/app/runway_prepare.py' in x for x in calls))
 
 
 if __name__=='__main__':unittest.main()

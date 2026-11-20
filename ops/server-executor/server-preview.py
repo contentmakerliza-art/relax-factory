@@ -1,6 +1,7 @@
 """Server-only full-frame preview builder. Never publishes or approves results."""
 import argparse
 import json
+import math
 from pathlib import Path
 import re
 import subprocess
@@ -33,17 +34,25 @@ def main(request_id):
     probe = json.loads(run('docker','exec','relax-factory','ffprobe','-v','error',
                           '-show_streams','-of','json',prefix+'/source.mp4'))
     stream = next(s for s in probe['streams'] if s['codec_type']=='video')
-    if float(stream['duration'])<9.9:
-        raise ValueError('Need a complete ten-second clip')
-    filters = [f'[{i}:v]fps=24,trim=end_frame=240,settb=1/24,setpts=N,scale=1920:1080:flags=lanczos,setsar=1,format=yuv420p,fps=24[v{i}]' for i in range(4)]
-    filters += ['[v0][v1]xfade=transition=fade:duration=0.75:offset=9.25,settb=1/24,fps=24[x1]',
-                '[x1][v2]xfade=transition=fade:duration=0.75:offset=18.5,settb=1/24,fps=24[x2]',
-                '[x2][v3]xfade=transition=fade:duration=0.75:offset=27.75[full]']
+    duration = float(stream['duration'])
+    if duration < 7.99 or duration > 10.2:
+        raise ValueError('Need a clean eight-to-ten-second source, never a three-second loop')
+    frames = min(240, math.floor(duration * 24 + .01))
+    seconds = frames / 24
+    step = seconds - .75
+    count = math.ceil((30 - seconds) / step) + 1
+    filters = [f'[{i}:v]fps=24,trim=end_frame={frames},settb=1/24,setpts=N,setsar=1,format=yuv420p,fps=24[v{i}]' for i in range(count)]
+    previous = 'v0'
+    for i in range(1, count):
+        filters.append(f'[{previous}][v{i}]xfade=transition=fade:duration=0.75:offset={i * step:.6f},settb=1/24,fps=24[x{i}]')
+        previous = f'x{i}'
+    # Blend at source resolution; upscale once to keep memory bounded.
+    filters.append(f'[{previous}]scale=1920:1080:flags=lanczos,format=yuv420p,fps=24[full]')
     command = ['docker','exec','relax-factory','ffmpeg','-nostdin','-v','error','-n',
                '-filter_complex_threads','1']
-    for _ in range(4): command += ['-i',prefix+'/source.mp4']
+    for _ in range(count): command += ['-threads','1','-i',prefix+'/source.mp4']
     command += ['-i',prefix+'/audio.wav','-filter_complex',';'.join(filters),
-                '-map','[full]','-map','4:a:0','-t','30','-r','24','-c:v','libx264',
+                '-map','[full]','-map',f'{count}:a:0','-t','30','-r','24','-c:v','libx264',
                 '-threads','2','-preset','fast','-crf','19','-pix_fmt','yuv420p',
                 '-c:a','aac','-b:a','192k','-movflags','+faststart',prefix+'/preview.mp4']
     run(*command)
@@ -58,6 +67,7 @@ def main(request_id):
         capture_output=True,text=True,check=True).stderr
     report = {'request_id':request_id,'preview':str(folder/'preview.mp4'),
               'full_frame_only':True,'local_masks':False,'audio_source':str(audio),
+              'source_seconds':seconds,'source_frames':frames,'repeat_inputs':count,
               'technical_check':'passed','visual_motion_review':'PENDING',
               'listening_review':'PENDING','delivery':'HELD_UNTIL_QA',
               'audio_measurement':volume[-2000:],'command':command}
