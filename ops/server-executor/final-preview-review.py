@@ -1,6 +1,7 @@
 """Automated visual prescreen of a complete 30-second owner preview, not approval."""
 import argparse,json,os,pwd,shutil,subprocess,re,time
 from pathlib import Path
+import project_memory
 
 
 def run(args,**kw):
@@ -11,9 +12,12 @@ def run(args,**kw):
 def main(rid,recheck=False):
     if not re.fullmatch(r'cabin(?:08|22)-(?:fullframe|clean)-v(?:[1-9]|1[0-8])-20261120',rid):raise ValueError('Unsupported preview')
     root=Path('/opt/relax-codex/assets')/rid
+    memory=project_memory.context('Quiet Pines Cabin',stage='preview_qc',request_id=rid,
+                                  request='снег окна кот голова камин склейка')
     result=root/'final-preview-qc.json'
     if result.exists():
-        if not recheck:return json.loads(result.read_text())
+        cached=json.loads(result.read_text())
+        if not recheck and cached.get('memory_policy_fingerprint')==memory['policy_fingerprint']:return cached
         history=root/'qa-history';history.mkdir(exist_ok=True)
         shutil.copy2(result,history/f'final-preview-before-native-snow-{time.time_ns()}.json')
     prefix='/tmp/'+rid
@@ -38,6 +42,8 @@ def main(rid,recheck=False):
         'defects':{'type':'array','items':{'type':'string'}},
         'limitations':{'type':'string'}},'required':['verdict','defects','limitations']}
     (w/'schema.json').write_text(json.dumps(schema))
+    (w/'context-snapshot.json').write_text(json.dumps(memory,ensure_ascii=False,indent=2))
+    references=project_memory.reference_images(memory,w,user)
     prompt=('Do not use tools. These are chronological samples of the actual 30-second preview. '
         'First image: 20 whole-frame samples, five columns. Second: 60 fireplace/cat closeups, six columns. '
         'Third: six window crops at native pixel scale in two columns, at 0, 5, 10, 15, 20, 25 seconds. '
@@ -51,7 +57,11 @@ def main(rid,recheck=False):
         'Numerical full-sequence checks run separately. This is an automated prescreen for a human test '
         'approval, never owner approval or evidence of listening or real-time playback. Give concrete '
         'defects in Russian; if sampled visuals are suitable for owner inspection choose '
-        'READY_FOR_OWNER_PREVIEW. State sampling limitations honestly.')
+        'READY_FOR_OWNER_PREVIEW. State sampling limitations honestly. '
+        'Additional images, if present, are historical references from the same channel, '
+        'not extra frames of this clip. Different rooms are allowed. Historical verdicts '
+        'are not proof of a defect in current frames. Active scoped project memory:\n'
+        +json.dumps(memory,ensure_ascii=False))
     run(['systemd-run','--unit=relax-final-qc-'+rid,'--collect','--wait','--pipe',
         '-p','User=relax-codex','-p','WorkingDirectory='+str(w),'-p','MemoryMax=512M',
         '-p','CPUQuota=25%','-p','RuntimeMaxSec=180','--setenv=HOME=/var/lib/relax-codex',
@@ -59,8 +69,10 @@ def main(rid,recheck=False):
         '/opt/relax-codex/release-0.171.0/bin/codex','exec','--ephemeral','--skip-git-repo-check',
         '--sandbox','read-only','--image',str(w/'preview-contact.jpg'),'--image',str(w/'preview-detail.jpg'),
         '--image',str(w/'preview-snow.jpg'),
+        *[arg for ref in references for arg in ['--image',ref]],
         '--output-schema',str(w/'schema.json'),'-o',str(w/'qc.json'),prompt],timeout=210)
-    value=json.loads((w/'qc.json').read_text());result.write_text(json.dumps(value,ensure_ascii=False,indent=2))
+    value=json.loads((w/'qc.json').read_text());value['memory_policy_fingerprint']=memory['policy_fingerprint']
+    result.write_text(json.dumps(value,ensure_ascii=False,indent=2))
     return value
 
 

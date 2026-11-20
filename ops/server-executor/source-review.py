@@ -7,6 +7,7 @@ import pwd
 import re
 import shutil
 import subprocess
+import project_memory
 
 
 def main(source, request_id):
@@ -18,8 +19,13 @@ def main(source, request_id):
     folder = Path('/opt/relax-codex/assets') / request_id
     folder.mkdir(exist_ok=True)
     result = folder / 'source-qc.json'
+    memory=project_memory.context('Quiet Pines Cabin',stage='image_qc',request_id=request_id,
+                                  request='кот анатомия камин отражение окна')
     if result.exists():
-        return json.loads(result.read_text())
+        cached=json.loads(result.read_text())
+        if cached.get('memory_policy_fingerprint')==memory['policy_fingerprint']:return cached
+        history=folder/'qa-history';history.mkdir(exist_ok=True)
+        shutil.copy2(result,history/('source-qc-before-memory-'+str(result.stat().st_mtime_ns)+'.json'))
     user = pwd.getpwnam('relax-codex')
     workspace = Path('/var/lib/relax-codex/workspace') / request_id
     workspace.mkdir(exist_ok=True, mode=0o700)
@@ -34,24 +40,31 @@ def main(source, request_id):
         'defects':{'type':'array','items':{'type':'string'}},
         'limitations':{'type':'string'}},'required':['verdict','defects','limitations']}
     (workspace / 'schema.json').write_text(json.dumps(schema))
+    (workspace/'context-snapshot.json').write_text(json.dumps(memory,ensure_ascii=False,indent=2))
+    references=project_memory.reference_images(memory,workspace,user)
     prompt = ('Do not use tools. Inspect this new source photograph for Quiet Pines Cabin. '
               'It is a new scene, not a pixel-identical restoration of an older photograph. '
               'Reject malformed cat or furniture, implausible room geometry, a second or inserted '
               'firebox, a bright window-shaped reflection inside the hearth, obvious snowflakes '
-              'floating indoors or over indoor objects, or lack of noticeable snowfall outside. '
+              'floating indoors or over indoor objects, or absence of a readable winter scene outside. '
+              'A still image cannot prove falling speed or continuous snow movement; those need video. '
               'The cat must be naturally asleep, curled up, eyes closed, chin supported. '
               'Distinguish stationary wood knots, stone grain and natural plaster marks from snow: '
               'do not invent floating flakes from those textures. Give concrete defects in Russian. '
-              'If the still scene looks sound, NEEDS_VIDEO_TEST; this is not approval of motion or sound.')
+              'If the still scene looks sound, NEEDS_VIDEO_TEST; this is not approval of motion or sound. '
+              'Extra images are historical references from other scenes, not alternate target images. '
+              'Active scoped memory:\n'+json.dumps(memory,ensure_ascii=False))
     subprocess.run(['systemd-run','--unit=relax-qc-'+request_id,'--collect','--wait','--pipe',
         '-p','User=relax-codex','-p','WorkingDirectory='+str(workspace),'-p','MemoryMax=512M',
         '-p','CPUQuota=25%','-p','RuntimeMaxSec=180','--setenv=HOME=/var/lib/relax-codex',
         '--setenv=CODEX_HOME=/var/lib/relax-codex/.codex',
         '/opt/relax-codex/release-0.171.0/bin/codex','exec','--ephemeral','--skip-git-repo-check',
         '--sandbox','read-only','--image',str(image),'--output-schema',str(workspace/'schema.json'),
+        *[arg for ref in references for arg in ['--image',ref]],
         '-o',str(workspace/'qc.json'),prompt],check=True,capture_output=True,text=True,
         stdin=subprocess.DEVNULL,timeout=210)
     value=json.loads((workspace/'qc.json').read_text())
+    value['memory_policy_fingerprint']=memory['policy_fingerprint']
     result.write_text(json.dumps(value,ensure_ascii=False,indent=2))
     return value
 

@@ -23,6 +23,11 @@ def main():
     planner=module('planner',ROOT/'plan-one.py')
     bridge=planner.bridge
     rows=bridge.read_rows(Path('/var/lib/relax-factory'))
+    memory_path=ROOT/'project_memory.py'
+    if memory_path.exists():
+        try:module('project_memory_refresh',memory_path).refresh(rows)
+        except Exception as error:
+            print(json.dumps({'memory_refresh':'requires_inspection','error':type(error).__name__}))
     production=json.loads(Path('/var/lib/relax-factory/approved-production-queue.json').read_text())
     db=sqlite3.connect('/var/lib/relax-codex-bridge/tasks.sqlite',timeout=10)
     bridge.ingest(db,rows)

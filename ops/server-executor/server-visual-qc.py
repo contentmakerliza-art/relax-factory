@@ -6,6 +6,7 @@ import pwd
 import os
 import re
 import subprocess
+import project_memory
 
 
 def run(*args):
@@ -42,6 +43,10 @@ def main(request_id):
         'defects':{'type':'array','items':{'type':'string'}},
         'limitations':{'type':'string'}},'required':['verdict','defects','limitations']}
     (workspace/'schema.json').write_text(json.dumps(schema))
+    memory=project_memory.context('Quiet Pines Cabin',stage='video_qc',request_id=request_id,
+                                  request='снег кот голова камин движение')
+    (workspace/'context-snapshot.json').write_text(json.dumps(memory,ensure_ascii=False,indent=2))
+    references=project_memory.reference_images(memory,workspace,u)
     output=workspace/'qc.json'
     prompt=('Do not use tools. Review the actual full video samples: first image is chronological '
         f'20 evenly spaced frames spanning {duration:.3f} seconds in 5 columns, '
@@ -51,7 +56,9 @@ def main(request_id):
         'rigid room and fireplace structure, no inserts or overlays, natural existing flames, '
         'few plausible reflections. REJECT any visible defect, give concrete evidence in Russian. '
         'Otherwise NEEDS_MOTION_REVIEW: samples do not prove smooth motion, transitions or audio. '
-        'Do not invent defects or assume prior attempt failed.')
+        'Do not invent defects or assume prior attempt failed. Extra images are historical '
+        'references of other clips from this channel, not frames of the current clip. '
+        'Different room layouts are allowed. Active scoped memory:\n'+json.dumps(memory,ensure_ascii=False))
     if request_id.startswith('cabin18-'):
         prompt += (' Owner specifically rejected a bright window-shaped reflection in the fireplace and repeated cat movement. '
                    'Reject any visible window-shaped rectangle/reflection inside the firebox even if it was present in the source image. '
@@ -62,9 +69,11 @@ def main(request_id):
          '--setenv=CODEX_HOME=/var/lib/relax-codex/.codex',
          '/opt/relax-codex/release-0.171.0/bin/codex','exec','--ephemeral','--skip-git-repo-check',
          '--sandbox','read-only','--image',str(workspace/'contact.png'),'--image',str(workspace/'frame5.png'),
+         *[arg for ref in references for arg in ['--image',ref]],
          '--output-schema',str(workspace/'schema.json'),'-o',str(output),prompt]
     subprocess.run(cmd,stdin=subprocess.DEVNULL,capture_output=True,text=True,timeout=210,check=True)
-    report=json.loads(output.read_text());(root/'visual-qc.json').write_text(json.dumps(report,ensure_ascii=False,indent=2))
+    report=json.loads(output.read_text());report['memory_policy_fingerprint']=memory['policy_fingerprint']
+    (root/'visual-qc.json').write_text(json.dumps(report,ensure_ascii=False,indent=2))
     print(json.dumps(report,ensure_ascii=False))
 
 
