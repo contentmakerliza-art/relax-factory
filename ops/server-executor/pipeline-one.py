@@ -14,6 +14,8 @@ def main(request_id):
     folder=Path('/opt/relax-codex/assets')/request_id;folder.mkdir(exist_ok=True)
     lock=(folder/'pipeline.lock').open('w');fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
     statefile=folder/'pipeline.json'
+    if statefile.exists() and json.loads(statefile.read_text()).get('stage')=='rejected_preview':
+        print(json.dumps({'held':'Later full-preview QC rejected this version'}));return
     def save(stage,**details):
         tmp=folder/'pipeline.tmp';tmp.write_text(json.dumps({'request_id':request_id,'stage':stage,
              'updated':time.time(),**details},ensure_ascii=False,indent=2));tmp.replace(statefile)

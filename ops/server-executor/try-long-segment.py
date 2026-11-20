@@ -23,7 +23,13 @@ def main(request_id):
         raise ValueError('Unsupported parent')
     parent=ROOT/'assets'/request_id
     report=parent/'long-segment.json'
-    if report.exists():return json.loads(report.read_text())
+    if report.exists():
+        cached=json.loads(report.read_text())
+        if cached.get('state')=='preview_ready':
+            current=json.loads((ROOT/'assets'/cached['request_id']/'pipeline.json').read_text())
+            if current['stage']!='held_for_motion_and_audio_review':
+                return dict(state='trim_rejected_after_final_review',pipeline=current)
+        return cached
     def save(**data):
         report.write_text(json.dumps(data,ensure_ascii=False,indent=2));return data
     source=DOWNLOADS/(request_id+'.mp4')

@@ -23,8 +23,9 @@ def locate(template,patch):
     return sub(scores[iy],ix)-3,sub(scores[:,ix],iy)-3,float(scores[iy,ix])
 
 
-def main(request_id):
-    path=Path('/tmp')/request_id/'source.mp4'
+def main(request_id,filename='source.mp4'):
+    if filename not in ('source.mp4','preview.mp4'):raise ValueError('Unsupported media file')
+    path=Path('/tmp')/request_id/filename
     proc=subprocess.Popen(['ffmpeg','-nostdin','-v','error','-i',str(path),'-vf','fps=8,scale=1280:720',
                            '-pix_fmt','gray','-threads','1','-f','rawvideo','-'],stdout=subprocess.PIPE)
     regions={'head':(805,496,94,70),'paws':(833,552,95,30),'wall':(160,20,100,100)}
@@ -49,14 +50,16 @@ def main(request_id):
             if name not in templates:templates[name]=feature(frame[y:y+h,x:x+w])
             positions[name].append(locate(templates[name],frame[y-3:y+h+3,x-3:x+w+3]))
     if proc.wait()!=0:raise ValueError('Decode failed')
-    (path.parent/'motion-traces.json').write_text(json.dumps({'sample_rate':8,'regions':regions,'positions':positions}))
+    prefix='preview-' if filename=='preview.mp4' else ''
+    (path.parent/(prefix+'motion-traces.json')).write_text(json.dumps({'sample_rate':8,'regions':regions,'positions':positions}))
     report={}
     for name,items in positions.items():
         a=np.asarray(items)
         report[name]={'x_range_pixels':float(np.ptp(a[:,0])),'y_range_pixels':float(np.ptp(a[:,1])),
                       'max_match_mse':float(a[:,2].max()),'samples':len(items)}
-    (path.parent/'head-motion.json').write_text(json.dumps(report,indent=2));print(json.dumps(report))
+    (path.parent/(prefix+'head-motion.json')).write_text(json.dumps(report,indent=2));print(json.dumps(report))
 
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser();p.add_argument('request_id');main(p.parse_args().request_id)
+    p=argparse.ArgumentParser();p.add_argument('request_id');p.add_argument('--filename',default='source.mp4')
+    a=p.parse_args();main(a.request_id,a.filename)

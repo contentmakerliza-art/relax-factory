@@ -94,5 +94,20 @@ class ProductionRetryTests(unittest.TestCase):
             self.assertEqual(len([x for x in calls if '/app/retry-download.py' in x]),1)
             self.assertFalse(any('/app/runway_prepare.py' in x for x in calls))
 
+    def test_provider_failures_do_not_buy_another_image(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config,path=self.setup_files(Path(tmp))
+            for i,rid in enumerate(config['sources'][0]['attempts']):
+                p=retry.ROOT/'assets'/rid;p.mkdir(parents=True)
+                (p/'pipeline.json').write_text(json.dumps({'stage':'rejected'}))
+                if i<2:(retry.STATE/('runway-'+rid+'.json')).write_text(json.dumps({
+                    'state':'generation_failed','created':i+1}))
+            def fake(args,**kwargs):
+                self.assertIn(str(retry.ROOT/'try-long-segment.py'),args)
+                return type('Result',(),{'stdout':json.dumps({'state':'no_clean_eight_second_segment'})})()
+            with patch.object(retry,'run',side_effect=fake):retry.main(path)
+            state=json.loads((retry.ROOT/'production-runs/cabin08-retry-20261120/state.json').read_text())
+            self.assertEqual(state['stage'],'provider_unavailable_no_image_purchase')
+
 
 if __name__=='__main__':unittest.main()

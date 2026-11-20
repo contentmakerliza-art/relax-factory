@@ -19,7 +19,7 @@ STATE = Path('/opt/marketplace-analytics/studio-state')
 MAX_ATTEMPTS = 3
 
 
-def run(args, timeout=960):
+def run(args, timeout=3600):
     return subprocess.run(args, check=True, capture_output=True, text=True,
                           stdin=subprocess.DEVNULL, timeout=timeout)
 
@@ -74,6 +74,22 @@ def work(config, folder):
             edit = read(Path(source['new_image_request']))
             ledger = STATE / (edit['request_id'] + '.json')
             if not ledger.exists():
+                known = []
+                for item in STATE.glob('runway-*.json'):
+                    try:
+                        value = read(item)
+                        if value.get('state') in ('generation_failed', 'downloaded_needs_qc'):
+                            known.append(value)
+                    except (OSError, ValueError):
+                        pass
+                last_success = max((x.get('created', 0) for x in known
+                                    if x['state'] == 'downloaded_needs_qc'), default=0)
+                outages = [x for x in known if x['state'] == 'generation_failed'
+                           and x.get('created', 0) > last_success]
+                if len(outages) >= 2:
+                    save('provider_unavailable_no_image_purchase',
+                         reason='Two technical failures since last successful video; source quality is not the cause')
+                    return
                 save('generating_new_source', image_number=index + 1,
                      maximum_image_cost_tokens=3)
                 run(['docker', 'exec', 'marketplace-syntx-studio', 'python',
@@ -106,7 +122,26 @@ def work(config, folder):
             generation = read(ledger)
             pipeline = ROOT / 'assets' / request_id / 'pipeline.json'
             prior = read(pipeline)
-            if prior and prior['stage'] in ('rejected', 'rejected_motion'):
+            if generation and generation['state'] == 'submitted':
+                save('waiting_for_already_submitted_video', request_id=request_id)
+                remaining = max(0, 900 - (time.time() - generation.get('created', 0)))
+                deadline = time.monotonic() + remaining
+                while generation['state'] == 'submitted' and time.monotonic() < deadline:
+                    time.sleep(5)
+                    generation = read(ledger)
+            # An independent server follower may already be checking this exact
+            # result. Wait for its durable outcome instead of racing its lock.
+            prior = read(pipeline)
+            if prior and prior['stage'] in ('checking_frames','checking_cat_motion','building_preview'):
+                deadline = time.monotonic() + 900
+                while prior['stage'] in ('checking_frames','checking_cat_motion','building_preview') and time.monotonic() < deadline:
+                    time.sleep(5)
+                    prior = read(pipeline)
+            if prior and prior['stage'] == 'held_for_motion_and_audio_review':
+                save('preview_ready_for_final_checks', request_id=request_id,
+                     preview=prior['preview'], owner_approval=False)
+                return
+            if prior and prior['stage'] in ('rejected', 'rejected_motion', 'rejected_preview'):
                 if salvage(request_id):return
                 continue
             if generation and generation['state'] == 'generation_failed':
@@ -163,7 +198,7 @@ def work(config, folder):
             save('checking_video', request_id=request_id)
             run(['/usr/bin/python3', str(ROOT / 'pipeline-one.py'), request_id], timeout=900)
             checked = read(pipeline)
-            if checked['stage'] in ('rejected', 'rejected_motion'):
+            if checked['stage'] in ('rejected', 'rejected_motion', 'rejected_preview'):
                 if salvage(request_id):return
                 continue
             if checked['stage'] == 'held_for_motion_and_audio_review':
