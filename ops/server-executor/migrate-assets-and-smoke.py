@@ -21,22 +21,23 @@ def main():
         if time.monotonic()>deadline:raise TimeoutError('Archive transfer incomplete')
         time.sleep(10)
     if digest(archive)!=EXPECTED:raise ValueError('Archive is incomplete or changed')
-    rows=json.loads(manifest.read_text());assets=DATA/'executor-assets';assets.mkdir(exist_ok=True)
+    library=DATA/'sources/executor-library';library.mkdir(parents=True,exist_ok=True)
+    rows=json.loads(manifest.read_text());assets=library/'assets';assets.mkdir(exist_ok=True)
     with tarfile.open(archive,'r:gz') as tar:tar.extractall(assets,filter='data')
     for row in rows:
         p=(assets/row['path']).resolve()
         if assets.resolve() not in p.parents or p.stat().st_size!=row['bytes'] or digest(p)!=row['sha256']:
             raise ValueError('Asset failed verification: '+row['path'])
-    tools=DATA/'executor-tools';tools.mkdir(exist_ok=True)
+    tools=library/'tools';tools.mkdir(exist_ok=True)
     shutil.copy2(ROOT/'exhale-portable.py',tools/'exhale-portable.py')
     image=subprocess.run(['docker','inspect','--format','{{.Image}}','relax-factory'],
                          check=True,capture_output=True,text=True).stdout.strip()
-    output=DATA/'executor-smoke-tests/exhale';output.mkdir(parents=True,exist_ok=True)
+    output=library/'tests/exhale';output.mkdir(parents=True,exist_ok=True)
     command=['docker','run','--rm','--name','relax-exhale-smoke','--memory','512m','--cpus','1',
         '--network','none','--volumes-from','relax-factory','--env',
-        'PYTHONPATH=/data/executor-runtime/python3.12','--entrypoint','python',image,
-        '/data/executor-tools/exhale-portable.py','--assets','/data/executor-assets',
-        '--output','/data/executor-smoke-tests/exhale','--number','1']
+        'PYTHONPATH=/data/sources/executor-library/runtime/python3.12','--entrypoint','python',image,
+        '/data/sources/executor-library/tools/exhale-portable.py','--assets','/data/sources/executor-library/assets',
+        '--output','/data/sources/executor-library/tests/exhale','--number','1']
     result=subprocess.run(command,check=True,capture_output=True,text=True,timeout=900)
     rendered=json.loads(result.stdout)
     receipt=dict(stage='SERVER_PREVIEW_REBUILT',assets_verified=len(rows),archive_sha256=EXPECTED,

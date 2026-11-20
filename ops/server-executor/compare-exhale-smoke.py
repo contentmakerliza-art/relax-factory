@@ -13,7 +13,7 @@ def audio(path):
 def main():
     data=Path('/data');job=data/'20261119-102030-80a8'
     original=job/json.loads((job/'job.json').read_text())['output']
-    rebuilt=next((data/'executor-smoke-tests/exhale').glob('Exhale to Sleep — 30.11*.mp4'))
+    rebuilt=next((data/'sources/executor-library/tests/exhale').glob('Exhale to Sleep — 30.11*.mp4'))
     a=audio(original);b=audio(rebuilt);n=min(len(a),len(b))
     correlation=float(np.corrcoef(a[:n],b[:n])[0,1])
     reference=rebuilt.parent/'approved-reference.wav'
@@ -49,7 +49,7 @@ def main():
         original=str(original),rebuilt=str(rebuilt),listening_performed=False,
         source_pcm_identical=pcm_identical,
         passed=bool(len(diffs)==900 and pcm_identical and correlation>.999 and max(diffs)<1))
-    (data/'executor-smoke-tests/exhale/comparison.json').write_text(json.dumps(result,indent=2))
+    (data/'sources/executor-library/tests/exhale/comparison.json').write_text(json.dumps(result,indent=2))
     print(json.dumps(result))
     if not result['passed']:raise ValueError('Portable rebuild differs from approved preview')
 
