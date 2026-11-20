@@ -1,4 +1,4 @@
-"""Consume new owner decisions. Plan corrections once; no automatic video actions yet."""
+"""Consume owner decisions; execute supported audio fixes and plan other edits."""
 import importlib.util
 import json
 from pathlib import Path
@@ -33,6 +33,10 @@ def main():
             with db:db.execute("UPDATE tasks SET state='superseded' WHERE id=?",(task_id,))
             continue
         if state in ('pending_publication_check','approval_recorded_in_production'):
+            portable_path=ROOT/'portable-corrections.py'
+            if portable_path.exists():
+                correction=module('portable_approval',portable_path).reconcile_approval(job_id)
+                if correction is not None:production[job_id]=correction
             promoter=module('promoter',ROOT/'promote-approved.py')
             result=promoter.promote(job_id)
             if result is not None:
@@ -56,9 +60,13 @@ def main():
         if not comments or not (comments[-1].get('text') or comments[-1].get('transcript')):
             with db:db.execute("UPDATE tasks SET state='needs_transcription' WHERE id=?",(task_id,))
             continue
+        portable_path=ROOT/'portable-corrections.py'
+        if portable_path.exists():
+            portable=module('portable_corrections',portable_path)
+            if portable.try_dispatch(task_id,current,db):return
         midnight=datetime.now(ZoneInfo('Europe/Moscow')).replace(hour=0,minute=0,second=0,microsecond=0).timestamp()
         # Bound unattended subscription usage. No API fallback or purchased credits.
-        count=db.execute("SELECT count(*) FROM tasks WHERE state NOT IN ('pending_executor','pending_publication_check','awaiting_comment','superseded','needs_transcription','approval_recorded_in_production','publication_queued','publication_attention_required') AND created>=?",(midnight,)).fetchone()[0]
+        count=db.execute("SELECT count(*) FROM tasks WHERE state NOT IN ('pending_executor','pending_publication_check','awaiting_comment','superseded','needs_transcription','approval_recorded_in_production','publication_queued','publication_attention_required') AND state NOT LIKE 'portable_%' AND created>=?",(midnight,)).fetchone()[0]
         if count>=20:return
         planner.main(job_id)
         return  # One model call per invocation; separate timer starts the next job.

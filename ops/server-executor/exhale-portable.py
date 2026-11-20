@@ -59,7 +59,8 @@ def render_circle(mode,font_path,target):
     temp.replace(target)
 
 
-def main(asset_root,output_root,number):
+def main(asset_root,output_root,number,background_db=0):
+    if not -24<=background_db<=0:raise ValueError('Only bounded background reduction is supported')
     base=asset_root/'Исходники/Exhale to Sleep/Новые 20 проб'
     rows=json.loads((base/'Журнал производства.json').read_text())
     row=next(r for r in rows if r['number']==number)
@@ -70,11 +71,13 @@ def main(asset_root,output_root,number):
     visual=output_root/(row['mode']+'-circle-30s.mp4')
     render_circle(mode,base/'DM Sans Medium.ttf',visual)
     target=output_root/(row['label']+'.mp4');temp=target.with_name(target.stem+'.partial.mp4')
-    gain=float(row['background_gain'])
+    gain=float(row['background_gain'])*10**(background_db/20)
     # Stream just the required background interval; never decode all six banks into RAM.
     bg=preview_pcm(background,row['background_offset']);spoken=preview_pcm(voice)
     if len(bg)!=1440000 or len(spoken)!=1440000:raise ValueError('Incomplete thirty-second audio')
     bg*=gain;mix=spoken+bg
+    if not np.isfinite(mix).all() or float(np.abs(mix).max())>=.93:
+        raise ValueError('Audio mix exceeds the checked peak limit')
     mix[:480]*=np.linspace(0,1,480)[:,None];mix[-480:]*=np.linspace(1,0,480)[:,None]
     sound=output_root/(row['label']+' — source PCM.wav')
     with wave.open(str(sound),'wb') as f:
@@ -95,6 +98,7 @@ def main(asset_root,output_root,number):
         sha256=hashlib.sha256(target.read_bytes()).hexdigest(),rendered_on_server=True,
         voice_source=str(voice),background_source=str(background),background_gain=gain,
         source_pcm=str(sound),
+        background_adjustment_db=background_db,
         owner_approval_unchanged=True,long_final_started=False)
     target.with_suffix('.json').write_text(json.dumps(result,ensure_ascii=False,indent=2))
     print(json.dumps(result,ensure_ascii=False))
@@ -103,4 +107,5 @@ def main(asset_root,output_root,number):
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--assets',type=Path,required=True)
     p.add_argument('--output',type=Path,required=True);p.add_argument('--number',type=int,required=True)
-    args=p.parse_args();main(args.assets,args.output,args.number)
+    p.add_argument('--background-db',type=float,default=0)
+    args=p.parse_args();main(args.assets,args.output,args.number,args.background_db)
