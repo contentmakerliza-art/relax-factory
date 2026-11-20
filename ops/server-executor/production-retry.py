@@ -148,6 +148,8 @@ def work(config, folder):
                 continue
             if not generation:
                 request = dict(request_id=request_id, source=str(local), prompt=source['runway_prompt'])
+                if source.get('model'):
+                    request['model']=source['model']
                 request_path = DOWNLOADS / (request_id + '-request.json')
                 if request_path.exists() and read(request_path) != request:
                     raise ValueError('Existing staged request differs')

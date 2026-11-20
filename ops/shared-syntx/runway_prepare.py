@@ -8,7 +8,9 @@ from browser_lease import browser_lease
 from playwright.sync_api import sync_playwright
 
 
-def prepare(source, prompt, *, submit=False, request_id=None):
+def prepare(source, prompt, *, submit=False, request_id=None, model_name='Gen-4.5 Image to Video'):
+    if model_name not in ('Gen-4.5 Image to Video','Gen-4 Turbo','Gen-4'):
+        raise ValueError('Only explicitly supported image-to-video models are allowed')
     source = Path(source).resolve()
     if source.parent != Path('/downloads') or not source.is_file():
         raise ValueError('Expected an existing staged reference in /downloads')
@@ -35,6 +37,7 @@ def prepare(source, prompt, *, submit=False, request_id=None):
             if not original.startswith('https://syntx.ai/'):
                 raise RuntimeError('Unexpected browser page')
             page.set_default_timeout(15000)
+            attached_reference = False
             try:
                 page.goto('https://syntx.ai/ru/video/runway', wait_until='domcontentloaded')
                 textarea = page.get_by_placeholder('Напишите ваш промпт...', exact=True)
@@ -45,7 +48,7 @@ def prepare(source, prompt, *, submit=False, request_id=None):
                 if not model.is_visible():
                     page.locator('[data-cy="ai-select-menu-btn"]').click()
                 model.locator('.el-select__wrapper').click()
-                page.locator('[data-cy="ai-model-Gen-4.5 Image to Video"]').click()
+                page.locator('[data-cy="ai-model-'+model_name+'"]').click()
                 # Selecting a model closes the menu; do not click a hidden confirm button.
                 for index, value in [(0, r'^16:9(?:\s|$)'), (1, r'^10 секунд$')]:
                     page.locator('form .form-settings__badge').nth(index).locator('.el-select__wrapper').click()
@@ -54,6 +57,7 @@ def prepare(source, prompt, *, submit=False, request_id=None):
                 if form.locator('.uploaded-files__list img').count():
                     raise RuntimeError('Unexpected attached image; do not replace silently')
                 page.locator('input[type=file]').set_input_files(str(source))
+                attached_reference = True
                 dialog = page.get_by_role('dialog', name='Параметры изображения')
                 dialog.wait_for(state='visible')
                 dialog.get_by_role('button', name='Подтвердить', exact=True).click()
@@ -73,7 +77,7 @@ def prepare(source, prompt, *, submit=False, request_id=None):
                     before = page.locator('video source').evaluate_all('(es)=>es.map(e=>e.src)')
                     record = {'request_id': request_id, 'state': 'submission_uncertain',
                               'prompt': prompt, 'source': source.name, 'created': time.time(),
-                              'model': 'Gen-4.5 Image to Video', 'seconds': 10, 'cost_tokens': 0}
+                              'model': model_name, 'seconds': 10, 'cost_tokens': 0}
                     # Persist BEFORE clicking. Even a crash cannot trigger an automatic retry.
                     with ledger.open('x') as handle:
                         json.dump(record, handle); handle.flush(); os.fsync(handle.fileno())
@@ -108,7 +112,7 @@ def prepare(source, prompt, *, submit=False, request_id=None):
                     ledger.write_text(json.dumps(record))
                     return {'submitted': True, 'state': record['state'], 'request_id': request_id}
                 return {'prepared': True, 'submitted': False, 'cost_tokens': 0,
-                        'model': 'Gen-4.5 Image to Video', 'seconds': 10, 'ratio': '16:9'}
+                        'model': model_name, 'seconds': 10, 'ratio': '16:9'}
             except Exception:
                 if submit and ledger and ledger.exists():
                     saved = json.loads(ledger.read_text())
@@ -122,7 +126,21 @@ def prepare(source, prompt, *, submit=False, request_id=None):
                         ledger.write_text(json.dumps(saved))
                 raise
             finally:
-                page.goto(original, wait_until='domcontentloaded')
+                try:
+                    if not submit and attached_reference:
+                        # A quote must not leave its input image in the shared form.
+                        references = page.locator('form [data-cy="uploaded-file"]')
+                        own = [r for r in references.all() if (r.get_attribute('data-key') or '').startswith(source.name+'-')]
+                        if len(own)==1:
+                            dialog=page.get_by_role('dialog',name='Параметры изображения')
+                            if dialog.is_visible():
+                                dialog.get_by_role('button',name='Подтвердить',exact=True).click()
+                                dialog.wait_for(state='hidden',timeout=60000)
+                            if own[0].locator('button').count()!=1:raise RuntimeError('Inspect own quoted reference before clearing it')
+                            own[0].locator('button').click()
+                            page.wait_for_function('()=>document.querySelectorAll("form .uploaded-files__list img").length===0')
+                finally:
+                    page.goto(original, wait_until='domcontentloaded')
 
 
 if __name__ == '__main__':
@@ -133,4 +151,5 @@ if __name__ == '__main__':
     args = parser.parse_args()
     request = json.loads(Path(args.request).read_text())
     print(json.dumps(prepare(request.get('source', '/downloads/cabin-17-source.jpg'), request['prompt'],
-                             submit=args.submit, request_id=request.get('request_id', 'cabin17-fullframe-v1-20261120'))))
+                             submit=args.submit, request_id=request.get('request_id', 'cabin17-fullframe-v1-20261120'),
+                             model_name=request.get('model','Gen-4.5 Image to Video'))))

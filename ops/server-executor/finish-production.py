@@ -36,7 +36,9 @@ def main(group):
     if not re.fullmatch(r'cabin(?:08|22)-retry-20261120',group):raise ValueError('Unsupported prepared series')
     folder=ROOT/'production-runs'/group
     with (folder/'finisher.lock').open('w') as lock:
-        fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        # A recovery follower may arrive while the prior one is notifying an
+        # outage. Serialize the handover; the durable receipt prevents resends.
+        fcntl.flock(lock,fcntl.LOCK_EX)
         try:
             finish(group,folder)
         except Exception as error:
@@ -53,16 +55,21 @@ def finish(group,folder):
     old=read(receipt)
     if old and old.get('stage')=='sent_for_owner_approval':return
     config=read(ROOT/'production-configs'/(group+'.json'))
-    deadline=time.monotonic()+10800
+    started=time.monotonic()
+    deadline=started+10800
     rejected=set((old or {}).get('rejected_requests',[]))
     def save(stage,**details):
         p=folder/'delivery.tmp';p.write_text(json.dumps(dict(stage=stage,updated=time.time(),
             rejected_requests=sorted(rejected),**details),ensure_ascii=False,indent=2));p.replace(receipt)
-    if not receipt.exists():save('waiting_for_checked_preview')
+    save('waiting_for_checked_preview',previous_stage=(old or {}).get('stage'))
     while time.monotonic()<deadline:
         state=read(folder/'state.json') or {}
         if state.get('stage') in ('prepared_source_pool_exhausted','provider_unavailable_no_image_purchase',
             'technical_attention_required','preparation_failed_no_submission','recover_existing_video','recover_existing_image'):
+            # A producer launched asynchronously alongside us may not have
+            # replaced its prior terminal state yet. Give it startup time.
+            if time.monotonic()-started<30:
+                time.sleep(2);continue
             save('held_for_inspection',production=state)
             notify_hold(folder,state['stage']);return
         if state.get('stage')!='preview_ready_for_final_checks':time.sleep(10);continue

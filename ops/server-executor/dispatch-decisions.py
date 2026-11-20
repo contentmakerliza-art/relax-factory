@@ -15,6 +15,11 @@ def module(name, path):
 
 
 def main():
+    try:
+        module('production_recovery',ROOT/'recover-production.py').main()
+    except Exception as error:
+        # Recovery must not prevent new owner decisions from being ingested.
+        print(json.dumps({'production_recovery':'requires_inspection','error':type(error).__name__}))
     planner=module('planner',ROOT/'plan-one.py')
     bridge=planner.bridge
     rows=bridge.read_rows(Path('/var/lib/relax-factory'))
