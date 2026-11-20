@@ -1,0 +1,54 @@
+"""Measure local template displacement on fixed Cabin 18 geometry, not visual approval."""
+import argparse,json,subprocess
+from pathlib import Path
+import numpy as np
+
+
+def feature(a):
+    a=a.astype(np.float32)
+    return a-a.mean()
+
+
+def locate(template,patch):
+    scores=np.empty((7,7))
+    for dy in range(7):
+        for dx in range(7):
+            other=feature(patch[dy:dy+template.shape[0],dx:dx+template.shape[1]])
+            scores[dy,dx]=np.mean((other-template)**2)
+    iy,ix=np.unravel_index(np.argmin(scores),scores.shape)
+    def sub(v,i):
+        if not 0<i<len(v)-1:return float(i)
+        den=v[i-1]-2*v[i]+v[i+1]
+        return i+float((v[i-1]-v[i+1])/(2*den)) if den>0 else float(i)
+    return sub(scores[iy],ix)-3,sub(scores[:,ix],iy)-3,float(scores[iy,ix])
+
+
+def main(request_id):
+    path=Path('/tmp')/request_id/'source.mp4'
+    proc=subprocess.Popen(['ffmpeg','-nostdin','-v','error','-i',str(path),'-vf','fps=8,scale=1280:720',
+                           '-pix_fmt','gray','-threads','1','-f','rawvideo','-'],stdout=subprocess.PIPE)
+    regions={'head':(805,496,94,70),'paws':(833,552,95,30),'wall':(160,20,100,100)}
+    templates={};positions={k:[] for k in regions}
+    while True:
+        raw=bytearray()
+        while len(raw)<1280*720:
+            chunk=proc.stdout.read(1280*720-len(raw))
+            if not chunk:break
+            raw.extend(chunk)
+        if not raw:break
+        if len(raw)!=1280*720:raise ValueError('Incomplete frame')
+        frame=np.frombuffer(raw,np.uint8).reshape(720,1280)
+        for name,(x,y,w,h) in regions.items():
+            if name not in templates:templates[name]=feature(frame[y:y+h,x:x+w])
+            positions[name].append(locate(templates[name],frame[y-3:y+h+3,x-3:x+w+3]))
+    if proc.wait()!=0:raise ValueError('Decode failed')
+    report={}
+    for name,items in positions.items():
+        a=np.asarray(items)
+        report[name]={'x_range_pixels':float(np.ptp(a[:,0])),'y_range_pixels':float(np.ptp(a[:,1])),
+                      'max_match_mse':float(a[:,2].max()),'samples':len(items)}
+    (path.parent/'head-motion.json').write_text(json.dumps(report,indent=2));print(json.dumps(report))
+
+
+if __name__=='__main__':
+    p=argparse.ArgumentParser();p.add_argument('request_id');main(p.parse_args().request_id)

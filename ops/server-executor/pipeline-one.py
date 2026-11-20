@@ -37,6 +37,17 @@ def main(request_id):
             save('rejected',defects=qc['defects']);return
         if qc['verdict']!='NEEDS_MOTION_REVIEW':
             raise ValueError('Unknown QC verdict')
+        if request_id.startswith('cabin18-'):
+            motion_path=folder/'head-motion.json'
+            if not motion_path.exists():
+                save('checking_cat_motion')
+                subprocess.run(['docker','cp','/opt/relax-codex/head-motion.py','relax-factory:/tmp/head-motion.py'],check=True,capture_output=True)
+                result=subprocess.run(['docker','exec','relax-factory','python','/tmp/head-motion.py',request_id],check=True,capture_output=True,text=True,timeout=90)
+                motion_path.write_text(json.dumps(json.loads(result.stdout),indent=2))
+            motion=json.loads(motion_path.read_text())
+            moving=[name for name in ('head','paws','wall') if max(motion[name]['x_range_pixels'],motion[name]['y_range_pixels'])>1.0]
+            if moving:
+                save('rejected_motion',moving_regions=moving,metrics=motion);return
         preview=folder/'preview.mp4'
         if not preview.exists():
             save('building_preview');execute('server-preview.py')
