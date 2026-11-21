@@ -45,7 +45,9 @@ def main(group):
         # outage. Serialize the handover; the durable receipt prevents resends.
         fcntl.flock(lock,fcntl.LOCK_EX)
         try:
-            finish(group,folder)
+            with (ROOT/'cabin-backlog/media-check.lock').open('a') as media_lock:
+                fcntl.flock(media_lock,fcntl.LOCK_EX)
+                finish(group,folder)
         except Exception as error:
             receipt=folder/'delivery.json'
             value=read(receipt) or {}
@@ -62,9 +64,9 @@ def finish(group,folder):
     config=read(ROOT/'production-configs'/(group+'.json'))
     started=time.monotonic()
     deadline=started+10800
-    rejected=set((old or {}).get('rejected_requests',[]))
+    rejected=set((old or {}).get('rejected_requests',[])) if (old or {}).get('motion_policy_version')==VERSION else set()
     def save(stage,**details):
-        p=folder/'delivery.tmp';p.write_text(json.dumps(dict(stage=stage,updated=time.time(),
+        p=folder/'delivery.tmp';p.write_text(json.dumps(dict(stage=stage,updated=time.time(),motion_policy_version=VERSION,
             rejected_requests=sorted(rejected),**details),ensure_ascii=False,indent=2));p.replace(receipt)
     save('waiting_for_checked_preview',previous_stage=(old or {}).get('stage'))
     while time.monotonic()<deadline:
@@ -98,9 +100,9 @@ def finish(group,folder):
         (assets/'preview-head-motion.json').write_text(json.dumps(motion,indent=2))
         moving=moving_regions(motion)
         defects=[]
-        if not media['technical_screen_passed'] or media['max_adjacent_frame_difference']>5:
+        if not media['technical_screen_passed']:
             defects.append('Technical frame/audio screen failed')
-        if moving:defects.append('Preview displacement beyond region-specific limits: '+', '.join(moving))
+        if moving:(assets/'numeric-motion-flags.json').write_text(json.dumps({'regions':moving,'metrics':motion,'requires_visual_review':True},indent=2))
         if not defects:
             visual=json.loads(run(['/usr/bin/python3',str(ROOT/'cabin-backlog'/'final-preview-review.py'),rid],timeout=300).stdout)
             if visual['verdict']!='READY_FOR_OWNER_PREVIEW':defects+=visual['defects'] or ['Visual prescreen rejected']
@@ -108,17 +110,15 @@ def finish(group,folder):
             pipeline=read(assets/'pipeline.json');pipeline.update(stage='rejected_preview',defects=defects,updated=time.time())
             (assets/'pipeline.json').write_text(json.dumps(pipeline,ensure_ascii=False,indent=2))
             rejected.add(rid);save('retrying_after_preview_rejection',request_id=rid,defects=defects)
-            run(['systemd-run','--unit=relax-after-qc-'+rid,'--collect','-p','MemoryMax=128M',
-                '-p','CPUQuota=10%','-p','RuntimeMaxSec=10800','/usr/bin/python3',str(ROOT/'cabin-backlog'/'production-retry.py'),
-                str(ROOT/'production-configs'/(group+'.json'))])
-            time.sleep(10);continue
+            save('deferred_after_preview_rejection',request_id=rid,defects=defects)
+            return
         recipe=json.loads(run(['docker','exec','relax-factory','python','/tmp/check-publication-loop.py',rid]).stdout)
         (assets/'publication-loop-check.json').write_text(json.dumps(recipe,indent=2))
         run(['docker','exec','relax-factory','ffmpeg','-nostdin','-v','error','-y','-threads','1',
              '-i',prefix+'/preview.mp4','-frames:v','1','-threads','1',prefix+'/cover.jpg'])
         run(['docker','cp','relax-factory:'+prefix+'/cover.jpg',str(assets/'cover.jpg')])
         ready=dict(ready_for_owner_review=True,review_type='automated_test_prescreen',
-            motion_policy_version=VERSION,
+            motion_policy_version=VERSION,numeric_motion_flags=moving,numeric_motion_is_approval=False,
             full_frame_only=True,local_masks=False,decoded_frames=media['frames'],
             audio_correlation=media['audio_correlation'],approved_audio_source=str(audio),
             real_time_playback_performed=False,listening_performed=False,

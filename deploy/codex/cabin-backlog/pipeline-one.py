@@ -58,7 +58,8 @@ def main(request_id):
             motion=json.loads(motion_path.read_text())
             moving=moving_regions(motion)
             if moving:
-                save('rejected_motion',moving_regions=moving,metrics=motion);return
+                # Owner requests visual triage, not rejection from template fit alone.
+                (folder/'numeric-motion-flags.json').write_text(json.dumps({'regions':moving,'metrics':motion,'requires_visual_review':True},indent=2))
         preview=folder/'preview.mp4'
         if not preview.exists():
             save('building_preview');execute('server-preview.py')

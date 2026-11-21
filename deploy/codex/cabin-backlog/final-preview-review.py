@@ -6,6 +6,7 @@ import cabin_backlog_registry as backlog
 import argparse,json,os,pwd,shutil,subprocess,re,time
 from pathlib import Path
 import project_memory
+REVIEW_VERSION='2026-11-21-visible-defects-v2'
 
 
 def run(args,**kw):
@@ -21,7 +22,7 @@ def main(rid,recheck=False):
     result=root/'final-preview-qc.json'
     if result.exists():
         cached=json.loads(result.read_text())
-        if not recheck and cached.get('memory_policy_fingerprint')==memory['policy_fingerprint']:return cached
+        if not recheck and cached.get('memory_policy_fingerprint')==memory['policy_fingerprint'] and cached.get('review_version')==REVIEW_VERSION:return cached
         history=root/'qa-history';history.mkdir(exist_ok=True)
         shutil.copy2(result,history/f'final-preview-before-native-snow-{time.time_ns()}.json')
     prefix='/tmp/'+rid
@@ -32,7 +33,31 @@ def main(rid,recheck=False):
     snow_crop=backlog.geometry(rid)['snow_crop']
     filters={'preview-contact':'fps=2/3,scale=640:-1,tile=5x4',
              'preview-detail':'fps=2,scale=1280:720,crop='+crop+',scale=300:-1,tile=6x10',
-             'preview-snow':'fps=1/5,scale=1280:720,crop='+snow_crop+',tile=2x3'}
+             'preview-snow':'fps=2/3,scale=1280:720,crop='+snow_crop+',tile=4x5'}
+    screen=root/'media-screen.json'
+    if screen.exists():
+        value=json.loads(screen.read_text())
+        if value['max_adjacent_frame_difference']>5:
+            peak=value['max_difference_frame']
+            filters['preview-peak']=f'select=between(n\\,{max(0,peak-2)}\\,{peak+2}),scale=640:-1,tile=3x2'
+    # Examine the exact worst numerical moments, not only evenly spaced samples.
+    numeric=root/'preview-head-motion.json'
+    if numeric.exists():
+        from motion_policy import moving_regions
+        if moving_regions(json.loads(numeric.read_text())):
+            traces=json.loads(run(['docker','exec','relax-factory','cat',prefix+'/preview-motion-traces.json']).stdout)
+            frames={0,719};rate=traces['sample_rate']
+            for region in ['head','paws','wall']:
+                values=traces['positions'][region]
+                for axis in [0,1]:
+                    extrema=[min(range(len(values)),key=lambda i:values[i][axis]),max(range(len(values)),key=lambda i:values[i][axis])]
+                    for index in extrema:
+                        center=round((index+.5)*24/rate)
+                        frames.update(max(0,min(719,center+delta)) for delta in [-1,0,1])
+            frames=sorted(frames)[:24]
+            x,y,w,h=backlog.geometry(rid)['regions']['head'];right=min(1280,x+w+20);bottom=min(720,y+h+20);x=max(0,x-20);y=max(0,y-20);w=right-x;h=bottom-y
+            select='+'.join('eq(n\\,'+str(n)+')' for n in frames)
+            filters['preview-motion']=f'select={select},scale=1280:720,crop={w}:{h}:{x}:{y},scale={w*3}:{h*3}:flags=neighbor,tile=6x4'
     for name,f in filters.items():
         run(['docker','exec','relax-factory','ffmpeg','-nostdin','-v','error','-y','-threads','1',
              '-i',prefix+'/preview.mp4','-vf',f,'-frames:v','1','-threads','1',prefix+'/'+name+'.jpg'])
@@ -48,16 +73,19 @@ def main(rid,recheck=False):
     (w/'schema.json').write_text(json.dumps(schema))
     (w/'context-snapshot.json').write_text(json.dumps(memory,ensure_ascii=False,indent=2))
     references=project_memory.reference_images(memory,w,user)
-    prompt=('Do not use tools. These are chronological samples of the actual 30-second preview. '
+    prompt=(f'The first {len(filters)} images are target sheets, in this order: {list(filters)}. Any later images are historical references. '
+        'Do not use tools. These are chronological samples of the actual 30-second preview. '
         'First image: 20 whole-frame samples, five columns. Second: 60 fireplace/cat closeups, six columns. '
-        'Third: six window crops at native pixel scale in two columns, at 0, 5, 10, 15, 20, 25 seconds. '
-        'Use the native window crops to judge fine snow, not only the reduced whole-frame sheet. '
+        'Third: twenty window crops at the scene coordinate scale in four columns, every 1.5 seconds. '
+        'The optional preview-peak sheet shows consecutive frames around the largest brightness difference; distinguish normal flame lighting from a geometry or camera jump. The optional preview-motion sheet shows enlarged cat-head crops at the worst numerical template-match moments. Blank cells are sheet padding, not black video frames. Judge actual visible pose changes: template displacement alone can be caused by flame shadows or compression. Accept a measurement artifact only when these closeups show the cat remains asleep with stable head/ears/paws. Reject noticeable motion or unresolved uncertainty. '
+        'Use the window crops to judge fine snow, not only the reduced whole-frame sheet. '
         'Do not call snow absent merely because tiny flakes disappear after downscaling; '
         'reject if the detailed samples show no visible falling snow. '
         'Reject obvious snow indoors, window-shaped reflections in the firebox, double/inserted hearth, '
-        'moving fireplace structure, distorted furniture, waking/moving cat, moving head ears paws tail, '
+        'moving fireplace structure, distorted furniture, waking cat or clearly noticeable head/ear/paw/tail movement, '
         'camera movement, ghosted shapes or rhythmic seam jumps. Fine snow must visibly fall outside '
-        'all windows. Natural fixed stone/wood texture is not floating snow. The cat may breathe barely. '
+        'the outdoor view over the sequence. Individual frames or partly occluded panes need not contain identical flakes. Natural fixed stone/wood texture is not floating snow. The cat may breathe barely. '
+        'Owner allows minor flake-size differences, perspective-related uneven snow and natural flame lighting/shadows. Do not reject these preferences, tiny compression shimmer or subpixel edge changes as geometry or head motion. Noticeable outdoor snowfall, a sleeping cat, a fixed camera and a smooth loop are still required. '
         'Numerical full-sequence checks run separately. This is an automated prescreen for a human test '
         'approval, never owner approval or evidence of listening or real-time playback. Give concrete '
         'defects in Russian; if sampled visuals are suitable for owner inspection choose '
@@ -73,9 +101,11 @@ def main(rid,recheck=False):
         '/opt/relax-codex/release-0.171.0/bin/codex','exec','--ephemeral','--skip-git-repo-check',
         '--sandbox','read-only','--image',str(w/'preview-contact.jpg'),'--image',str(w/'preview-detail.jpg'),
         '--image',str(w/'preview-snow.jpg'),
+        *(['--image',str(w/'preview-peak.jpg')] if 'preview-peak' in filters else []),
+        *(['--image',str(w/'preview-motion.jpg')] if 'preview-motion' in filters else []),
         *[arg for ref in references for arg in ['--image',ref]],
         '--output-schema',str(w/'schema.json'),'-o',str(w/'qc.json'),prompt],timeout=210)
-    value=json.loads((w/'qc.json').read_text());value['memory_policy_fingerprint']=memory['policy_fingerprint']
+    value=json.loads((w/'qc.json').read_text());value['review_version']=REVIEW_VERSION;value['memory_policy_fingerprint']=memory['policy_fingerprint']
     result.write_text(json.dumps(value,ensure_ascii=False,indent=2))
     return value
 

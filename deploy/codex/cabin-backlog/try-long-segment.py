@@ -57,7 +57,7 @@ def main(request_id):
             if valid and (best is None or end-start>best[1]-best[0]):best=(start,end)
     if best is None:return save(state='no_clean_eight_second_segment')
     start,end=best
-    if end-start>n-rate/2:return save(state='no_localized_motion_defect_to_trim')
+    if start==0 and end==n:return save(state='no_localized_motion_defect_to_trim')
     derived=request_id.replace('-fullframe-','-clean-')
     target=DOWNLOADS/(derived+'.mp4')
     work='/tmp/'+derived

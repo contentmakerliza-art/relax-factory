@@ -30,7 +30,12 @@ def locate(template,patch):
 def main(request_id,filename='source.mp4'):
     if filename not in ('source.mp4','preview.mp4'):raise ValueError('Unsupported media file')
     path=Path('/tmp')/request_id/filename
-    proc=subprocess.Popen(['ffmpeg','-nostdin','-v','error','-i',str(path),'-vf','fps=8,scale=1280:720',
+    reference=None
+    if filename=='source.mp4':
+        reference_raw=subprocess.run(['ffmpeg','-nostdin','-v','error','-ss','1','-i',str(path),'-vf','scale=1280:720','-frames:v','1','-pix_fmt','gray','-threads','1','-f','rawvideo','-'],capture_output=True,check=True).stdout
+        if len(reference_raw)!=1280*720:raise ValueError('Reference decode failed')
+        reference=np.frombuffer(reference_raw,np.uint8).reshape(720,1280)
+    proc=subprocess.Popen(['ffmpeg','-nostdin','-v','error','-i',str(path),'-vf','fps=24,scale=1280:720',
                            '-pix_fmt','gray','-threads','1','-f','rawvideo','-'],stdout=subprocess.PIPE)
     regions={'head':(805,496,94,70),'paws':(833,552,95,30),'wall':(160,20,100,100)}
     if request_id.startswith('cabin22-'):
@@ -52,11 +57,11 @@ def main(request_id,filename='source.mp4'):
         if len(raw)!=1280*720:raise ValueError('Incomplete frame')
         frame=np.frombuffer(raw,np.uint8).reshape(720,1280)
         for name,(x,y,w,h) in regions.items():
-            if name not in templates:templates[name]=feature(frame[y:y+h,x:x+w])
+            if name not in templates:templates[name]=feature((reference if reference is not None else frame)[y:y+h,x:x+w])
             positions[name].append(locate(templates[name],frame[y-3:y+h+3,x-3:x+w+3]))
     if proc.wait()!=0:raise ValueError('Decode failed')
     prefix='preview-' if filename=='preview.mp4' else ''
-    (path.parent/(prefix+'motion-traces.json')).write_text(json.dumps({'sample_rate':8,'regions':regions,'positions':positions}))
+    (path.parent/(prefix+'motion-traces.json')).write_text(json.dumps({'sample_rate':24,'reference_seconds':1 if filename=='source.mp4' else 0,'regions':regions,'positions':positions}))
     report={}
     for name,items in positions.items():
         a=np.asarray(items)

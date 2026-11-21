@@ -8,6 +8,8 @@ Runs only explicitly staged configurations. Good previews remain held for final
 review; this worker neither approves nor starts a three-hour render.
 """
 import argparse
+from motion_policy import VERSION
+from contextlib import contextmanager
 import fcntl
 import hashlib
 import importlib.util
@@ -21,6 +23,19 @@ ROOT = Path('/opt/relax-codex')
 DOWNLOADS = Path('/opt/marketplace-analytics/studio-downloads')
 STATE = Path('/opt/marketplace-analytics/studio-state')
 MAX_ATTEMPTS = 3
+
+@contextmanager
+def media_slot():
+    with (ROOT/'cabin-backlog/media-check.lock').open('a') as lock:
+        fcntl.flock(lock,fcntl.LOCK_EX)
+        yield
+
+def pipeline_is_running(path):
+    if not path.exists():return False
+    with path.open('a') as lock:
+        try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError:return True
+    return False
 DEFAULT_MODEL = 'Gen-4 Turbo'
 
 
@@ -83,7 +98,8 @@ def work(config, folder):
         tmp.replace(folder / 'state.json')
     def salvage(request_id):
         save('looking_for_long_clean_segment', request_id=request_id)
-        result = json.loads(run(['/usr/bin/python3', str(ROOT / 'cabin-backlog' / 'try-long-segment.py'),
+        with media_slot():
+            result = json.loads(run(['/usr/bin/python3', str(ROOT / 'cabin-backlog' / 'try-long-segment.py'),
                                  request_id], timeout=900).stdout)
         if result['state'] == 'preview_ready':
             save('preview_ready_for_final_checks', request_id=result['request_id'],
@@ -117,10 +133,11 @@ def work(config, folder):
                     return
                 save('generating_new_source', image_number=image_number,
                      maximum_image_cost_tokens=3)
-                run(['docker', 'exec', 'marketplace-syntx-studio', 'python',
-                     '/app/cabin-backlog-banana.py', '--request',
-                     '/downloads/' + Path(source['new_image_request']).name])
+                run(['/usr/bin/python3',str(ROOT/'cabin-backlog/await-syntx.py'),'image',source['new_image_request']])
             result = read(ledger)
+            if result and result.get('async_submission') and result.get('state') in ('submitted','generated_needs_download'):
+                run(['/usr/bin/python3',str(ROOT/'cabin-backlog/await-syntx.py'),'image',source['new_image_request']])
+                result=read(ledger)
             if not result or result.get('state') != 'downloaded_needs_qc':
                 save('recover_existing_image', image_number=image_number)
                 return
@@ -130,7 +147,8 @@ def work(config, folder):
         if local.parent != Path('/downloads') or not (DOWNLOADS / local.name).is_file():
             raise ValueError('Expected a staged source image')
         try:
-            backlog.prepare_geometry(job, index, DOWNLOADS / local.name)
+            with media_slot():
+                backlog.prepare_geometry(job, index, DOWNLOADS / local.name)
         except backlog.SourceRejected as error:
             save('source_rejected_changing_image', defects=[str(error)])
             continue
@@ -148,6 +166,15 @@ def work(config, folder):
             generation = read(ledger)
             pipeline = ROOT / 'assets' / request_id / 'pipeline.json'
             prior = read(pipeline)
+            if prior and prior.get('stage') in ('rejected_motion','rejected_preview') and prior.get('motion_policy_version')!=VERSION:
+                history=pipeline.parent/'qa-history';history.mkdir(exist_ok=True)
+                (history/('pipeline-before-owner-policy-'+str(time.time_ns())+'.json')).write_text(json.dumps(prior,ensure_ascii=False,indent=2))
+                prior.update(stage='needs_recheck_under_owner_policy',updated=time.time())
+                pipeline.write_text(json.dumps(prior,ensure_ascii=False,indent=2))
+            if generation and generation.get('async_submission') and generation['state'] in ('submitted','generated_needs_download'):
+                save('resuming_existing_server_generation',request_id=request_id)
+                run(['/usr/bin/python3',str(ROOT/'cabin-backlog/await-syntx.py'),'video',str(DOWNLOADS/(request_id+'-request.json'))])
+                generation=read(ledger)
             if generation and generation['state'] == 'submitted':
                 save('waiting_for_already_submitted_video', request_id=request_id)
                 remaining = max(0, 900 - (time.time() - generation.get('created', 0)))
@@ -158,7 +185,7 @@ def work(config, folder):
             # An independent server follower may already be checking this exact
             # result. Wait for its durable outcome instead of racing its lock.
             prior = read(pipeline)
-            if prior and prior['stage'] in ('checking_frames','checking_cat_motion','building_preview'):
+            if prior and prior['stage'] in ('checking_frames','checking_cat_motion','building_preview') and pipeline_is_running(pipeline.parent/'pipeline.lock'):
                 deadline = time.monotonic() + 900
                 while prior['stage'] in ('checking_frames','checking_cat_motion','building_preview') and time.monotonic() < deadline:
                     time.sleep(5)
@@ -171,7 +198,7 @@ def work(config, folder):
                 completed += 1
                 if salvage(request_id):return
                 continue
-            if generation and generation['state'] == 'generation_failed':
+            if generation and generation['state'] in ('generation_failed','client_result_lost_no_download'):
                 continue
             if not generation:
                 failures = model_failures(model)
@@ -189,12 +216,10 @@ def work(config, folder):
                      attempt=attempt, submission_slot=slot, source_sha256=digest,
                      maximum_attempts=3, model=model)
                 try:
-                    run(['docker', 'exec', 'marketplace-syntx-studio', 'python',
-                         '/app/runway_prepare.py', '--request', '/downloads/' + request_path.name,
-                         '--submit'])
+                    run(['/usr/bin/python3',str(ROOT/'cabin-backlog/await-syntx.py'),'video',str(request_path)])
                 except (subprocess.SubprocessError, OSError) as error:
                     generation = read(ledger)
-                    if generation and generation['state'] == 'generation_failed':
+                    if generation and generation['state'] in ('generation_failed','client_result_lost_no_download'):
                         continue
                     if generation and generation['state'] == 'generated_needs_download':
                         # The generation succeeded: resume below, never buy another.
@@ -206,7 +231,7 @@ def work(config, folder):
                              request_id=request_id)
                         return
                 generation = read(ledger)
-            if generation and generation['state'] == 'generation_failed':
+            if generation and generation['state'] in ('generation_failed','client_result_lost_no_download'):
                 continue
             if generation['state'] == 'generated_needs_download':
                 spec = importlib.util.spec_from_file_location('follow', ROOT / 'follow-generation.py')
@@ -233,7 +258,8 @@ def work(config, folder):
                 image_number=image_number, group=job), indent=2))
             save('checking_video', request_id=request_id)
             try:
-                run(['/usr/bin/python3', str(ROOT / 'cabin-backlog' / 'pipeline-one.py'), request_id], timeout=900)
+                with media_slot():
+                    run(['/usr/bin/python3', str(ROOT / 'cabin-backlog' / 'pipeline-one.py'), request_id], timeout=900)
             except subprocess.SubprocessError as error:
                 (folder / (request_id+'-pipeline-error.txt')).write_text(
                     (getattr(error,'stderr','') or type(error).__name__)[-4000:])
@@ -243,7 +269,8 @@ def work(config, folder):
             if checked['stage'] in ('rejected', 'rejected_motion', 'rejected_preview'):
                 completed += 1
                 if salvage(request_id):return
-                continue
+                save('deferred_after_video_rejection',request_id=request_id,completed_video_attempts=completed)
+                return
             if checked['stage'] == 'held_for_motion_and_audio_review':
                 save('preview_ready_for_final_checks', request_id=request_id,
                      preview=checked['preview'], owner_approval=False)

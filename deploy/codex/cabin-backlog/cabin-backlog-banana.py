@@ -18,8 +18,7 @@ def main(request=None):
         'stone chimney outline, black fireplace frame, wood furniture, green chair, gray chair, '
         'windows and snowy forest. Remove ONLY the bright window-shaped reflection inside '
         'the fireplace. The hearth interior is matte dark firebrick with the same small natural '
-        'wood fire. No reflective front glass, no reflected window, no mirror, no second firebox '
-        'and no inserted rectangle. Keep the original stonework and opening geometry. '
+        'wood fire. Keep the original stonework and opening geometry with matte surfaces. '
         'The same ginger cat sleeps tightly curled on the gray chair with its chin resting '
         'on its paws, eyes closed and relaxed ears. Preserve its natural anatomy and scale. '
         'No snow or particles inside the room. Photorealistic, same wide 16:9 composition.')
