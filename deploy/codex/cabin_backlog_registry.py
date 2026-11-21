@@ -24,6 +24,9 @@ def entry(rid,job=None):
     if rid in ('cabin03-snow3-v13-20261121','cabin03-snow4-v13-20261121'):parent='cabin03-fullframe-v13-20261121'
     if rid in ('cabin10-snow-v15-20261121','cabin10-snow2-v15-20261121'):parent='cabin10-fullframe-v15-20261121'
     if rid=='cabin11-snow-v1-20261121':parent='cabin11-fullframe-v1-20261121'
+    if rid=='cabin12-snow-v2-20261122':parent='cabin12-fullframe-v2-20261121'
+    if rid=='cabin15-snow-v14-20261122':parent='cabin15-fullframe-v14-20261121'
+    if rid=='cabin20-snow-v15-20261122':parent='cabin20-fullframe-v15-20261121'
     for row in records():
         if job is not None and row['request_group']!=job:continue
         for index,source in enumerate(row['sources']):
