@@ -11,6 +11,29 @@ producer=load('production-retry');finisher=load('finish-production')
 def write(path,value):
  path.parent.mkdir(parents=True,exist_ok=True);path.write_text(json.dumps(value))
 class NoRepeatTests(unittest.TestCase):
+ def test_next_submission_uses_specific_previous_defect(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   root=Path(tmp);downloads=root/'downloads';downloads.mkdir();(downloads/'source.jpg').write_bytes(b'source')
+   folder=root/'run';folder.mkdir();state=root/'state';state.mkdir()
+   ids=['cabin05-fullframe-v1-20261121','cabin05-fullframe-v2-20261121']
+   write(state/('runway-'+ids[0]+'.json'),{'state':'downloaded_needs_qc'})
+   write(root/'assets'/ids[0]/'pipeline.json',{'stage':'rejected_preview','defects':['Нет заметного снегопада за окном']})
+   write(root/'assets'/ids[0]/'long-segment.json',{'state':'no_clean_eight_second_segment'})
+   config={'request_group':'cabin05-backlog-20261121','sources':[{'file':'/downloads/source.jpg','runway_prompt':'Fixed scene base','attempts':ids}]}
+   submissions=[]
+   def execute(args,**kw):
+    if args[1].endswith('await-syntx.py'):
+     req=json.loads(Path(args[3]).read_text());submissions.append(req)
+     self.assertIn('Clearly visible continuous snowfall',req['prompt'])
+     write(state/('runway-'+ids[1]+'.json'),{'state':'downloaded_needs_qc'})
+    elif args[1].endswith('pipeline-one.py'):
+     write(root/'assets'/ids[1]/'pipeline.json',{'stage':'held_for_motion_and_audio_review','preview':'checked.mp4'})
+    else:self.fail('Unexpected expensive operation: '+str(args))
+   with patch.object(producer,'ROOT',root),patch.object(producer,'DOWNLOADS',downloads),patch.object(producer,'STATE',state),patch.object(producer,'media_slot',side_effect=nullcontext),patch.object(producer.backlog,'prepare_geometry'),patch.object(producer,'run',side_effect=execute):
+    producer.work(config,folder);producer.work(config,folder)
+   self.assertEqual(len(submissions),1)
+   audit=json.loads(next((folder/'corrections').glob('*.json')).read_text())
+   self.assertEqual(audit['evidence'][0]['request_id'],ids[0])
  def test_restart_and_policy_change_skip_rejected_media_and_cached_trim(self):
   with tempfile.TemporaryDirectory() as tmp:
    root=Path(tmp);downloads=root/'downloads';downloads.mkdir();(downloads/'source.jpg').write_bytes(b'source')

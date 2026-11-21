@@ -2,6 +2,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parent.parent))
 import cabin_backlog_registry as backlog
+import cabin_corrections
 """Bounded server production: three Runway attempts per source, then a new image.
 
 Runs only explicitly staged configurations. Good previews remain held for final
@@ -118,6 +119,13 @@ def work(config, folder):
             edit = read(Path(source['new_image_request']))
             ledger = STATE / (edit['request_id'] + '.json')
             if not ledger.exists():
+                prior_ids=[rid for earlier in config['sources'][:index] for rid in earlier['attempts']]
+                correction=cabin_corrections.prepare(Path(source['new_image_request']),edit,
+                    cabin_corrections.feedback(ROOT,prior_ids),'image',folder/'corrections')
+                if correction['requires_review']:
+                    save('correction_requires_review',request_id=edit['request_id'],
+                         reason='Audio, assembly or unrecognized defect needs a targeted fix before generation')
+                    return
                 known = []
                 for item in STATE.glob('runway-*.json'):
                     try:
@@ -224,12 +232,18 @@ def work(config, folder):
                     return
                 request = dict(request_id=request_id, source=str(local), prompt=source['runway_prompt'], model=model)
                 request_path = DOWNLOADS / (request_id + '-request.json')
-                if request_path.exists() and read(request_path) != request:
-                    raise ValueError('Existing staged request differs')
-                request_path.write_text(json.dumps(request))
+                prior_ids=[rid for earlier in config['sources'][:index] for rid in earlier['attempts']]
+                prior_ids+=source['attempts'][:slot-1]
+                correction=cabin_corrections.prepare(request_path,request,
+                    cabin_corrections.feedback(ROOT,prior_ids),'video',folder/'corrections')
+                if correction['requires_review']:
+                    save('correction_requires_review',request_id=request_id,
+                         reason='Audio, assembly or unrecognized defect needs a targeted fix before generation')
+                    return
                 save('generating_video', request_id=request_id, image_number=image_number,
                      attempt=attempt, submission_slot=slot, source_sha256=digest,
-                     maximum_attempts=3, model=model)
+                     maximum_attempts=3, model=model,correction_categories=correction['categories'],
+                     correction_evidence=[x['request_id'] for x in correction['evidence']])
                 try:
                     run(['/usr/bin/python3',str(ROOT/'cabin-backlog/await-syntx.py'),'video',str(request_path)])
                 except (subprocess.SubprocessError, OSError) as error:
