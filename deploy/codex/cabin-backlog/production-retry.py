@@ -232,7 +232,13 @@ def work(config, folder):
                 source_image=str(local), source_sha256=digest, attempt=attempt,
                 image_number=image_number, group=job), indent=2))
             save('checking_video', request_id=request_id)
-            run(['/usr/bin/python3', str(ROOT / 'cabin-backlog' / 'pipeline-one.py'), request_id], timeout=900)
+            try:
+                run(['/usr/bin/python3', str(ROOT / 'cabin-backlog' / 'pipeline-one.py'), request_id], timeout=900)
+            except subprocess.SubprocessError as error:
+                (folder / (request_id+'-pipeline-error.txt')).write_text(
+                    (getattr(error,'stderr','') or type(error).__name__)[-4000:])
+                save('technical_attention_required', request_id=request_id, pipeline=read(pipeline))
+                return
             checked = read(pipeline)
             if checked['stage'] in ('rejected', 'rejected_motion', 'rejected_preview'):
                 completed += 1

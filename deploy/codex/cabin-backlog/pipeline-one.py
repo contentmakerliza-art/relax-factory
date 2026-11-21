@@ -36,6 +36,9 @@ def main(request_id):
     if record['state']!='downloaded_needs_qc':
         save('held',reason='Unexpected generation state');return
     backlog.stage_geometry(request_id,backlog.geometry(request_id))
+    # Factory upgrades clear /tmp even when visual QC is already cached.
+    subprocess.run(['docker','cp','/opt/marketplace-analytics/studio-downloads/'+request_id+'.mp4',
+                    'relax-factory:/tmp/'+request_id+'/source.mp4'],check=True,capture_output=True)
     qcpath=folder/'visual-qc.json'
     try:
         if not qcpath.exists():
