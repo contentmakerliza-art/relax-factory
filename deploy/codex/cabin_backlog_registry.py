@@ -1,6 +1,7 @@
 """Exact allowlist and scene-specific measurement geometry for the Nov 21 Cabin backlog.
 
-Editing masks are forbidden. Rectangles below only select pixels for QA.
+Rectangles below only select pixels for QA. The one owner-authorized window
+Snow prototype uses its separate explicit glass mask, never fireplace inserts.
 """
 import hashlib,json,os,pwd,shutil,subprocess
 from pathlib import Path
@@ -19,6 +20,9 @@ def group(value):
 
 def entry(rid,job=None):
     parent=rid.replace('-clean-','-fullframe-').replace('-fixed-','-fullframe-')
+    if rid in ('cabin03-snow-v15-20261121','cabin03-snow2-v15-20261121'):parent='cabin03-fullframe-v15-20261121'
+    if rid in ('cabin03-snow3-v13-20261121','cabin03-snow4-v13-20261121'):parent='cabin03-fullframe-v13-20261121'
+    if rid=='cabin10-snow-v15-20261121':parent='cabin10-fullframe-v15-20261121'
     for row in records():
         if job is not None and row['request_group']!=job:continue
         for index,source in enumerate(row['sources']):
