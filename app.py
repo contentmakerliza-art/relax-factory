@@ -31,6 +31,7 @@ from starlette.concurrency import run_in_threadpool
 
 from imported_recipe import prepare as _prepare_imported_recipe
 from render import drive
+from render.quality import apply_queue_quality, apply_render_quality, VERSION as QUALITY_POLICY_VERSION
 from render.drive import fetch_folder
 from render.breathing import Breath as _Breath, parse_script
 from render.engine import Breath, Job, RenderSettings, kit_dir, make_check_clips, probe_duration, render
@@ -2184,6 +2185,7 @@ def _q_new(source: str, host: str, title: str, description: str, tags: str, publ
           "logo": logo}
     _q_fields(it, title, description, tags, publish_at, user, synthetic)
     it["channel"] = _q_channel(it["user"])
+    apply_queue_quality(it)
     if raw is not None or cover_url.strip():  # without a cover YouTube picks a frame itself
         _q_cover(it["id"], raw, cover_url.strip())
     return _q_append(it)
@@ -2258,6 +2260,20 @@ def queue_swap(a: str = Form(...), b: str = Form(...)):
         x["publish_at"], y["publish_at"] = y["publish_at"], x["publish_at"]
         _q_save()
         return [_q_public(x), _q_public(y)]
+
+
+@app.post("/queue-quality/apply", dependencies=[Depends(check)])
+def queue_quality_apply():
+    """Raise quality only for unstarted detailed-scene queue items."""
+    changed = []
+    with qlock:
+        for it in queue_items:
+            if it["status"] in ("ждёт", "черновик") and not it.get("job"):
+                if apply_queue_quality(it):
+                    changed.append({"id": it["id"], "channel": it.get("channel"),
+                                    "bitrate": it["bitrate"], "publish_at": it["publish_at"]})
+        _q_save()
+    return {"policy": QUALITY_POLICY_VERSION, "changed": changed}
 
 
 @app.post("/queue/confirm", dependencies=[Depends(check)])
@@ -2498,6 +2514,7 @@ def _q_start_render(it: dict) -> None:
     known = {k: v for k, v in meta.get("settings", {}).items() if k in RenderSettings.__dataclass_fields__}
     settings = RenderSettings(**known)
     settings.duration, settings.video_bitrate, settings.stab_mask = it["hours"] * 3600, f"{it['bitrate']}M", ""
+    apply_render_quality(it, settings)
     settings.logo = ""
     job_id = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
     folder = DATA / job_id
