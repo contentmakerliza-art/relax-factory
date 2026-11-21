@@ -1,0 +1,16 @@
+{
+  "review_date_msk": "2026-11-21",
+  "scope": ["Little Paris Jazz Cafe", "Quiet Pines Cabin", "Mountain View Cafe"],
+  "evidence_type": "Public video titles and descriptions; private tags, retention and keyword search volumes were not obtained",
+  "sources": [
+    {"creator": "Calmed By Nature", "url": "https://www.youtube.com/watch?v=zI_W7rz3eXE", "observed_topics": ["Christmas cafe ambience", "coffee shop", "instrumental jazz", "reading", "studying", "working"]},
+    {"creator": "Calmed By Nature", "url": "https://www.youtube.com/watch?v=eetIrEoqGrU", "observed_topics": ["Christmas coffee shop", "jazz ambience", "cozy winter setting"]},
+    {"creator": "Cozy Rain", "url": "https://www.youtube.com/watch?v=xTo6vySR4ys", "observed_topics": ["Christmas ambience", "fireplace", "snow outside", "three hours"]},
+    {"creator": "New Bliss", "url": "https://www.youtube.com/watch?v=mT0CUyL9Ha0", "evidence_url": "https://vidiq.com/youtube-stats/channel/@newbliss/videos/mT0CUyL9Ha0/", "limitation": "Video title inspected through public listing; full direct YouTube description unavailable", "observed_topics": ["Christmas fireplace", "snowfall", "cozy cabin", "relaxation"]}
+  ],
+  "application": "Original scene-specific copy using relevant common search phrases; no copied descriptions, competitor branding, 4K claims, medical promises, unverified ad-free claims or sounds absent from actual audio",
+  "soundtrack_rules": {"Little Paris Jazz Cafe": "Instrumental jazz", "Quiet Pines Cabin": "Approved full fireplace-9 audio only, no wind or music", "Mountain View Cafe": "Approved full fireplace-9 audio only, no wind or music"},
+  "public_links": "Remove Pixabay URL and optional attribution block from public metadata; retain audio source URL, author, license and hashes internally",
+  "license_evidence": {"asset_url": "https://pixabay.com/sound-effects/household-lit-fireplace-6307/", "terms_url": "https://pixabay.com/service/terms/", "summary_url": "https://pixabay.com/service/license-summary/", "asset_publication_date": "2021-08-05", "finding": "Asset marked free under Pixabay Content License; attribution is optional"},
+  "verification": {"scheduled_titles_updated": 50, "scheduled_metadata_updated": 50, "mountain_manual_metadata_files_updated": 7, "mountain_preparation_cards_updated": 18, "historical_mountain_cards_retained": 2, "source_publication_manifests_updated": 20, "description_words_scheduled_range": [205,251], "tag_count_range": [16,17], "tag_budget_with_quote_allowance_max": 490, "exhale_untouched": true, "publication_dates_unchanged": true, "approval_statuses_unchanged": true, "new_generation_jobs_for_metadata_changes": 0}
+}
