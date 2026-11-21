@@ -44,6 +44,7 @@ with (folder/'finisher.lock').open('a') as delivery_lock:
      supersedes_request_id=previous.get('request_id'),previous_job_id=previous.get('job_id'),
      rejected_requests=previous.get('rejected_requests',[]),updated=time.time())))
    temporary.replace(receipt)
+subprocess.run(['python3',str(ROOT/'check-cabin20-seam.py')],check=True,timeout=240)
 print('FINAL_QA_WINDOW_SNOW',flush=True)
 r=subprocess.run(['python3',str(ROOT/'cabin-backlog/finish-production.py'),group],capture_output=True,text=True,timeout=1200)
 (assets/'final-review-run.log').write_text(r.stdout+r.stderr);print(r.stdout,r.stderr[-2200:],flush=True);r.check_returncode()

@@ -39,15 +39,15 @@ def limited(cmd):
  if cmd[0]=='ffmpeg':cmd=cmd[:1]+['-nostdin','-threads','1','-filter_complex_threads','1']+cmd[1:-1]+['-threads','2']+cmd[-1:]
  return original(cmd)
 engine._run=limited
-settings=engine.RenderSettings(width=1280,height=720,fps=24,codec='work',loop_crossfade=.75,stabilize=False,smooth=False)
+settings=engine.RenderSettings(width=1280,height=720,fps=24,codec='work',loop_crossfade=.25,stabilize=False,smooth=False)
 engine._crossfade_loop(base/'composed.mp4',base/'native-loop.mp4',duration,settings)
 limited(['ffmpeg','-y','-i',str(base/'native-loop.mp4'),'-vf','scale=1920:1080:flags=lanczos','-an','-c:v','libx264','-preset','fast','-crf','16',str(base/'loop-master.mp4')])
 limited(['ffmpeg','-y','-stream_loop','-1','-i',str(base/'loop-master.mp4'),'-i',str(base/'audio.wav'),'-t','30','-map','0:v','-map','1:a',
  '-r','24','-c:v','libx264','-preset','fast','-crf','19','-c:a','aac','-b:a','192k','-movflags','+faststart',str(base/'preview.mp4')])
 loop=engine.probe_duration(base/'loop-master.mp4')
-if abs(loop-expected_loop_frames(round(duration*24))/24)>.05:raise ValueError('Cycle mismatch')
-report=dict(builder_version=VERSION,composition_version='kitchen-full-chair-back-exclusion-v3',occlusion_policy='full-chair-back-and-posts-plus-4-source-pixels',request_id=REQUEST,parent_request_id=PARENT,
- source_seconds=duration,source_frames=round(duration*24),loop_seconds=loop,loop_frames=round(loop*24),crossfade_seconds=.75,
+if abs(loop-(round(duration*24)-6)/24)>.05:raise ValueError('Cycle mismatch')
+report=dict(builder_version=VERSION,composition_version='kitchen-matched-native-segment-short-seam-v4',occlusion_policy='full-chair-back-and-posts-plus-4-source-pixels',request_id=REQUEST,parent_request_id=PARENT,
+ source_seconds=duration,source_frames=round(duration*24),loop_seconds=loop,loop_frames=round(loop*24),crossfade_seconds=.25,
  full_frame_only=True,local_masks=True,mask_scope='exterior_window_glass_only',fireplace_masks=False,window_snow_overlay=True,
  technical_check='passed',frame_border_crop_pixels=[48,27],preview_repeat='exact_cyclic_master',publication_loop_mode='repeat',publication_crossfade=0,
  stabilization='inherited_from_parent',source_sha256=hashlib.sha256((base/'composed.mp4').read_bytes()).hexdigest(),

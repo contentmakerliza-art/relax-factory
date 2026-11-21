@@ -1,7 +1,7 @@
 """Scene-specific safe glass and foreground masks for Cabin 20."""
 from cabin_window_snow import make_glass_mask,transform_box,WIDTH,HEIGHT,FRAME_BORDER_CROP
-PARENT='cabin20-fixed-v15-20261121'
-REQUEST='cabin20-snow2-v15-20261122'
+PARENT='cabin20-trimmed-v15-20261122'
+REQUEST='cabin20-snow3-v15-20261122'
 PANES=[[(373, 215), (405, 216), (405, 256), (373, 255)],
  [(415, 216), (445, 219), (445, 259), (415, 257)],
  [(373, 266), (405, 267), (405, 311), (373, 312)],
