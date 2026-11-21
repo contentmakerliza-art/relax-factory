@@ -30,6 +30,20 @@ with (ROOT/'cabin-backlog/media-check.lock').open('a') as lock:
   path=folder/name
   if path.exists():shutil.copy2(path,history/(str(time.time_ns())+'-'+name))
  (folder/'state.json').write_text(json.dumps(dict(stage='preview_ready_for_final_checks',updated=time.time(),request_id=REQUEST,preview=str(assets/'preview.mp4'),window_snow_overlay=True,owner_approval=False)))
+# A corrected request needs a fresh receipt; keep the prior delivery in history.
+with (folder/'finisher.lock').open('a') as delivery_lock:
+ fcntl.flock(delivery_lock,fcntl.LOCK_EX)
+ receipt=folder/'delivery.json'
+ if receipt.exists():
+  previous=json.loads(receipt.read_text())
+  if previous.get('stage')=='sent_for_owner_approval' and previous.get('request_id')!=REQUEST:
+   snapshot=folder/'window-snow-prototype-history'/(str(time.time_ns())+'-superseded-delivery.json')
+   shutil.copy2(receipt,snapshot)
+   temporary=folder/'delivery-corrected.tmp'
+   temporary.write_text(json.dumps(dict(stage='waiting_for_corrected_preview',request_id=REQUEST,
+     supersedes_request_id=previous.get('request_id'),previous_job_id=previous.get('job_id'),
+     rejected_requests=previous.get('rejected_requests',[]),updated=time.time())))
+   temporary.replace(receipt)
 print('FINAL_QA_WINDOW_SNOW',flush=True)
 r=subprocess.run(['python3',str(ROOT/'cabin-backlog/finish-production.py'),group],capture_output=True,text=True,timeout=1200)
 (assets/'final-review-run.log').write_text(r.stdout+r.stderr);print(r.stdout,r.stderr[-2200:],flush=True);r.check_returncode()
