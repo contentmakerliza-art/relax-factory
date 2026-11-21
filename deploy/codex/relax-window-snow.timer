@@ -1,0 +1,10 @@
+[Unit]
+Description=Resume queued Cabin window jobs without idle model calls
+
+[Timer]
+OnBootSec=45
+OnUnitInactiveSec=60
+Unit=relax-window-snow.service
+
+[Install]
+WantedBy=timers.target

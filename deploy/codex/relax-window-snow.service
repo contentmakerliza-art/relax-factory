@@ -1,0 +1,13 @@
+[Unit]
+Description=Cabin automatic window layout, assembly QA and preview delivery
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/relax-codex
+ExecStart=/usr/bin/python3 /opt/relax-codex/window_snow_auto.py
+MemoryMax=900M
+CPUQuota=100%
+Nice=10
+TimeoutStartSec=7200

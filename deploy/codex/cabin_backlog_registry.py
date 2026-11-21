@@ -3,7 +3,7 @@
 Rectangles below only select pixels for QA. The one owner-authorized window
 Snow prototype uses its separate explicit glass mask, never fireplace inserts.
 """
-import hashlib,json,os,pwd,shutil,subprocess
+import hashlib,json,os,pwd,shutil,subprocess,re
 from pathlib import Path
 
 ROOT=Path('/opt/relax-codex')
@@ -18,7 +18,24 @@ def records():
 def group(value):
     return any(r['request_group']==value for r in records())
 
+def auto_reference(rid):
+    if not re.fullmatch(r'cabin\d{2}-auto-[a-f0-9]{16}-a[12]',rid or ''):return None
+    paths=[ROOT/'window-snow/requests'/(rid+'.json'),Path('/tmp/cabin-backlog/auto-requests')/(rid+'.json')]
+    for path in paths:
+        if not path.exists():continue
+        value=json.loads(path.read_text())
+        parent=value.get('parent_request_id','')
+        if value.get('request_id')!=rid or '-auto-' in parent or not re.fullmatch(r'cabin\d{2}-[a-z0-9-]+',parent):raise ValueError('Invalid automatic source provenance')
+        if parent[:7]!=rid[:7]:raise ValueError('Automatic source belongs to another room')
+        return value
+    return None
+
+
 def entry(rid,job=None):
+    automatic=auto_reference(rid)
+    if automatic:
+        if job is not None and automatic.get('group')!=job:return None
+        return entry(automatic['parent_request_id'],automatic.get('group'))
     parent=rid.replace('-clean-','-fullframe-').replace('-fixed-','-fullframe-')
     if rid in ('cabin03-snow-v15-20261121','cabin03-snow2-v15-20261121'):parent='cabin03-fullframe-v15-20261121'
     if rid in ('cabin03-snow3-v13-20261121','cabin03-snow4-v13-20261121'):parent='cabin03-fullframe-v13-20261121'
@@ -59,7 +76,11 @@ def run(args,timeout=900):
 def stage_geometry(rid,value):
     target=ROOT/'assets'/rid;target.mkdir(exist_ok=True)
     (target/'geometry.json').write_text(json.dumps(value,ensure_ascii=False,indent=2))
-    run(['docker','exec','relax-factory','mkdir','-p','/tmp/'+rid,'/tmp/cabin-backlog'])
+    run(['docker','exec','relax-factory','mkdir','-p','/tmp/'+rid,'/tmp/cabin-backlog/auto-requests'])
+    automatic=auto_reference(rid)
+    if automatic:
+        path=ROOT/'window-snow/requests'/(rid+'.json')
+        run(['docker','cp',str(path),'relax-factory:/tmp/cabin-backlog/auto-requests/'+rid+'.json'])
     for src,dst in [(target/'geometry.json','/tmp/'+rid+'/geometry.json'),
         (Path(__file__),'/tmp/cabin_backlog_registry.py'),(REGISTRY,'/tmp/cabin-backlog/registry.json')]:
         run(['docker','cp',str(src),'relax-factory:'+dst])

@@ -128,6 +128,11 @@ def finish(group,folder):
             save('deferred_after_preview_rejection',request_id=rid,defects=defects)
             return
         built=read(assets/'recipe-and-checks.json') or {}
+        if built.get('auto_window_snow'):
+            assembly=read(assets/'assembly-qc.json') or {}
+            final=read(assets/'final-preview-qc.json') or {}
+            if not assembly.get('selected') or final.get('assembly_verdict')!='PASS' or final.get('mask_verdict')!='PASS':raise ValueError('Automatic mask/seam review did not pass')
+            if hashlib.sha256((assets/'layout.json').read_bytes()).hexdigest()!=built.get('layout_sha256'):raise ValueError('Frozen automatic layout changed')
         if built.get('publication_loop_mode')=='repeat':
             for src,dst in [(assets/'recipe-and-checks.json',prefix+'/recipe-and-checks.json'),
                             (assets/'loop-master.mp4',prefix+'/loop-master.mp4'),
@@ -149,6 +154,10 @@ def finish(group,folder):
                          window_snow_overlay=True)
         (assets/'owner-review-ready.json').write_text(json.dumps(ready,indent=2))
         run(['docker','cp',str(assets/'owner-review-ready.json'),'relax-factory:'+prefix+'/owner-review-ready.json'])
+        if built.get('auto_window_snow'):
+            from window_snow_auto import current
+            if not current(read(assets/'job-media.json')):
+                save('superseded_owner_decision',request_id=rid);return
         day=group[5:7];scene=config['scene_title']
         label=f'Quiet Pines Cabin — {int(day)} декабря — {scene} — серверная проба — 30 секунд'
         if built.get('window_snow_overlay'):

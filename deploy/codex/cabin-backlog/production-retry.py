@@ -183,6 +183,9 @@ def work(config, folder):
             generation = read(ledger)
             pipeline = ROOT / 'assets' / request_id / 'pipeline.json'
             prior = read(pipeline)
+            if prior and prior.get('stage') in ('window_snow_queued','auto_preview_delivered'):
+                if prior['stage']=='window_snow_queued':save('window_snow_compositing_required',request_id=request_id,auto_job=prior.get('auto_job'))
+                return
             if prior and prior.get('stage')=='held_for_snow_evidence':
                 save('quality_evidence_requires_review',request_id=request_id)
                 return
@@ -311,7 +314,7 @@ def work(config, folder):
                 save('technical_attention_required', request_id=request_id, pipeline=read(pipeline))
                 return
             checked = read(pipeline)
-            if checked['stage']=='window_snow_compositing_required':
+            if checked['stage'] in ('window_snow_compositing_required','window_snow_queued'):
                 save('window_snow_compositing_required',request_id=request_id,action='Prepare or reuse scene-specific glass mask; do not regenerate Runway')
                 return
             if checked['stage']=='held_for_snow_evidence':

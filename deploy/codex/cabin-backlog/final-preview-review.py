@@ -6,7 +6,7 @@ import cabin_backlog_registry as backlog
 import argparse,json,os,pwd,shutil,subprocess,re,time,hashlib
 from pathlib import Path
 import project_memory
-REVIEW_VERSION='2026-11-21-native-snow-bursts-v3'
+REVIEW_VERSION='2026-11-22-mask-and-seam-v4'
 
 
 def run(args,**kw):
@@ -36,6 +36,8 @@ def main(rid,recheck=False):
              'preview-detail':'fps=2,scale=1280:720,crop='+crop+',scale=300:-1,tile=6x10',
              'preview-snow':'fps=2/3,scale=1280:720,crop='+snow_crop+',tile=4x5',
              'preview-snow-bursts':'select=between(n\\,48\\,59)+between(n\\,120\\,131)+between(n\\,192\\,203),scale=1280:720,crop='+snow_crop+',tile=6x6'}
+    build_info=json.loads((root/'recipe-and-checks.json').read_text()) if (root/'recipe-and-checks.json').exists() else {}
+    auto=bool(build_info.get('auto_window_snow'))
     screen=root/'media-screen.json'
     if screen.exists():
         value=json.loads(screen.read_text())
@@ -65,19 +67,30 @@ def main(rid,recheck=False):
         run(['docker','exec','relax-factory','ffmpeg','-nostdin','-v','error','-y','-threads','1','-filter_threads','1',
              '-i',prefix+'/preview.mp4','-vf',f,'-frames:v','1','-threads','1',prefix+'/'+name+'.jpg'])
         run(['docker','cp','relax-factory:'+prefix+'/'+name+'.jpg',str(root/(name+'.jpg'))])
+    extra_names=['preview-mask','preview-seam'] if auto else []
+    for name in extra_names:
+        if not (root/(name+'.png')).is_file():raise ValueError('Automatic layout or seam evidence missing')
     user=pwd.getpwnam('relax-codex');w=Path('/var/lib/relax-codex/workspace')/(rid+'-final')
     w.mkdir(mode=0o700,exist_ok=True);os.chown(w,user.pw_uid,user.pw_gid)
     for name in filters:
         p=w/(name+'.jpg');shutil.copyfile(root/p.name,p);os.chown(p,user.pw_uid,user.pw_gid);p.chmod(0o600)
+    for name in extra_names:
+        p=w/(name+'.png');shutil.copyfile(root/p.name,p);os.chown(p,user.pw_uid,user.pw_gid);p.chmod(0o600)
     schema={'type':'object','additionalProperties':False,'properties':{
         'verdict':{'type':'string','enum':['REJECT','READY_FOR_OWNER_PREVIEW']},
         'defects':{'type':'array','items':{'type':'string'}},
         'outdoor_snow':{'type':'string','enum':['VISIBLE','ABSENT','UNCERTAIN']},
         'limitations':{'type':'string'}},'required':['verdict','defects','outdoor_snow','limitations']}
+    if auto:
+        schema['properties']['repair_stage']={'type':'string','enum':['NONE','MASK','SNOW_DENSITY','ASSEMBLY','SOURCE','UNCERTAIN']}
+        schema['required'].append('repair_stage')
+        for name in ['mask_verdict','assembly_verdict']:
+            schema['properties'][name]={'type':'string','enum':['PASS','FAIL','UNCERTAIN']}
+            schema['required'].append(name)
     (w/'schema.json').write_text(json.dumps(schema))
     (w/'context-snapshot.json').write_text(json.dumps(memory,ensure_ascii=False,indent=2))
     references=project_memory.reference_images(memory,w,user)
-    prompt=(f'The first {len(filters)} images are target sheets, in this order: {list(filters)}. Any later images are historical references. '
+    prompt=(f'The first {len(filters)+len(extra_names)} images are target sheets, in this order: {list(filters)+extra_names}. Any later images are historical references. '
         'Do not use tools. These are chronological samples of the actual 30-second preview. '
         'First image: 20 whole-frame samples, five columns. Second: 60 fireplace/cat closeups, six columns. '
         'Third: twenty window crops at the scene coordinate scale in four columns, every 1.5 seconds. '
@@ -100,6 +113,19 @@ def main(rid,recheck=False):
         'not extra frames of this clip. Different rooms are allowed. Historical verdicts '
         'are not proof of a defect in current frames. Active scoped project memory:\n'
         +json.dumps(memory,ensure_ascii=False))
+    if auto:
+        prompt += (' Two further target PNGs follow optional peak/motion sheets: preview-mask and preview-seam. '
+          'preview-mask shows pink permitted Snow area on the original normalized source before a constant 48/27 border crop; pink MUST NOT touch wood frames, chair backs/posts/rails/spindles, plants or indoor objects. '
+          'Inspect furniture silhouettes and every window mullion carefully; an overlaid polygon on any wooden rail is a MASK defect even if a sampled flake missed it. '
+          'preview-seam shows native-scale rigid-frame crops in chronological order around the ACTUAL transition and cyclic wrap, with frame numbers. '
+          'Compare adjacent seam crops for transient blur, doubled edges, scale changes or jumps. A previous numeric pass is not proof that the seam is visually acceptable. '
+          'Explicitly return mask_verdict and assembly_verdict as PASS/FAIL/UNCERTAIN. Numerical deviations alone are not visible defects; use the magnified actual seam crops to judge. Never choose READY if either verdict is FAIL or UNCERTAIN. '
+          'Set repair_stage=MASK for glass/foreground boundary errors, SNOW_DENSITY for insufficient exterior flakes, ASSEMBLY for blurred/ghosted seam, SOURCE for native cat/fire/geometry defects, UNCERTAIN if unresolved; NONE only for READY_FOR_OWNER_PREVIEW. '
+          'Slight natural ear movement is allowed; reject waking or visible head/paw/tail motion and seam jerks.')
+    if auto and build_info.get('native_loop_strategy'):
+        prompt += (' This assembly repair plays the complete native animation forward and backward; only the separate Snow layer keeps moving forward with its own cyclic alpha. '
+          'The seam sheet includes BOTH the native turning point and cyclic wrap. Reject visible camera reversal, jerks, frozen fire, or clearly unnatural flame motion. '
+          'Do not assume reversal is automatically good or automatically defective: judge the sampled actual flames and rigid geometry. No local fireplace mask or inserted flame is used.')
     prompt += ' Keep limitations to two short sentences; list only actual defects, not every passed rule.'
     run(['systemd-run','--unit=relax-final-qc-'+rid,'--collect','--wait','--pipe',
         '-p','User=relax-codex','-p','WorkingDirectory='+str(w),'-p','MemoryMax=512M',
@@ -111,10 +137,12 @@ def main(rid,recheck=False):
         '--image',str(w/'preview-snow-bursts.jpg'),
         *(['--image',str(w/'preview-peak.jpg')] if 'preview-peak' in filters else []),
         *(['--image',str(w/'preview-motion.jpg')] if 'preview-motion' in filters else []),
+        *[arg for name in extra_names for arg in ['--image',str(w/(name+'.png'))]],
         *[arg for ref in references for arg in ['--image',ref]],
         '--output-schema',str(w/'schema.json'),'-o',str(w/'qc.json'),prompt],timeout=210)
     value=json.loads((w/'qc.json').read_text());value['review_version']=REVIEW_VERSION;value['memory_policy_fingerprint']=memory['policy_fingerprint'];value['preview_sha256']=preview_sha
     if value['outdoor_snow']!='VISIBLE':value['verdict']='REJECT'
+    if auto and (value.get('mask_verdict')!='PASS' or value.get('assembly_verdict')!='PASS'):value['verdict']='REJECT'
     result.write_text(json.dumps(value,ensure_ascii=False,indent=2))
     return value
 
