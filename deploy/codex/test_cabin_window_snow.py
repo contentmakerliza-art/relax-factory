@@ -7,7 +7,7 @@ class WindowSnowTests(unittest.TestCase):
  @unittest.skipUnless(importlib.util.find_spec('PIL'),'Pillow runs in factory container')
  def test_new_masks_keep_fullhd_margin_and_feather_inside(self):
   mask=snow.make_glass_mask([[(10,10),(90,10),(90,90),(10,90)]],(100,100),output_size=(100,100))
-  self.assertTrue(all(mask.getpixel((x,50))==0 for x in range(13)))
+  self.assertTrue(all(mask.getpixel((x,50))==0 for x in range(14)))
   self.assertGreater(mask.getpixel((14,50)),0)
   self.assertEqual(mask.getpixel((50,50)),255)
  @unittest.skipUnless(importlib.util.find_spec('PIL'),'Pillow runs in factory container')

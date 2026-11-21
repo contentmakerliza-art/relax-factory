@@ -12,7 +12,10 @@ OCCLUDERS=[[(568,329),(690,329),(704,349),(711,376),(741,386),(774,392),
 PROTECTED=[(640,300),(650,100),(1235,200),(680,390),(1200,410),(500,540),(350,530),(280,350),(470,367),(900,440)]
 def make_mask():
  mx,my=FRAME_BORDER_CROP
- mask=make_glass_mask(PANES,(WIDTH,HEIGHT),output_size=(1920*WIDTH/(WIDTH-2*mx),1080*HEIGHT/(HEIGHT-2*my)))
+ # Reproduce the approved version exactly; new request IDs use the current default.
+ frozen_inset={'cabin10-snow-v15-20261121':3,'cabin10-snow2-v15-20261121':3}
+ options={'inset_output_px':frozen_inset[REQUEST]} if REQUEST in frozen_inset else {}
+ mask=make_glass_mask(PANES,(WIDTH,HEIGHT),output_size=(1920*WIDTH/(WIDTH-2*mx),1080*HEIGHT/(HEIGHT-2*my)),**options)
  from PIL import Image,ImageDraw,ImageFilter,ImageChops
  excluded=Image.new('L',(WIDTH,HEIGHT),0);draw=ImageDraw.Draw(excluded)
  for polygon in OCCLUDERS:draw.polygon(polygon,fill=255)

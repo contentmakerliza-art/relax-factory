@@ -19,7 +19,7 @@ PROTECTED=[(210,450),(515,487),(830,580),(1140,570),(640,30),(819,300),(1060,515
            (485,250),(1265,445),(985,542)]
 
 
-def make_glass_mask(polygons, size, *, output_size=(1920,1080), inset_output_px=3, feather_output_px=1):
+def make_glass_mask(polygons, size, *, output_size=(1920,1080), inset_output_px=4, feather_output_px=1):
     """Inset glass in final-frame pixels; feather only inward, never onto frames."""
     import math
     from PIL import Image,ImageDraw,ImageFilter,ImageChops
