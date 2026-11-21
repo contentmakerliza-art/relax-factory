@@ -50,6 +50,14 @@ class WindowSnowTests(unittest.TestCase):
     for polygon in scene.OCCLUDERS:draw.polygon(polygon,fill=255)
     self.assertIsNone(ImageChops.multiply(mask,foreground).getbbox())
     self.assertGreater(sum(mask.histogram()[1:]),10000)
+ @unittest.skipUnless(importlib.util.find_spec('PIL'),'Pillow runs in factory container')
+ def test_kitchen_chair_back_and_right_post_have_no_snow(self):
+  import cabin_window_snow20 as scene
+  mask=scene.make_mask()
+  # Regression: old outline left a notch between the upper and lower rails.
+  self.assertIsNone(mask.crop((605,427,745,524)).getbbox())
+  for point in [(723,475),(729,488),(736,501),(720,440)]:self.assertEqual(mask.getpixel(point),0)
+  self.assertGreater(mask.getpixel((1060,380)),250)
  def test_border_crop_preserves_aspect_and_moves_qa_regions(self):
   x,y=snow.FRAME_BORDER_CROP
   self.assertEqual((snow.WIDTH-2*x)*9,(snow.HEIGHT-2*y)*16)

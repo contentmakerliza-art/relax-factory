@@ -1,7 +1,7 @@
 """Scene-specific safe glass and foreground masks for Cabin 20."""
 from cabin_window_snow import make_glass_mask,transform_box,WIDTH,HEIGHT,FRAME_BORDER_CROP
 PARENT='cabin20-fixed-v15-20261121'
-REQUEST='cabin20-snow-v15-20261122'
+REQUEST='cabin20-snow2-v15-20261122'
 PANES=[[(373, 215), (405, 216), (405, 256), (373, 255)],
  [(415, 216), (445, 219), (445, 259), (415, 257)],
  [(373, 266), (405, 267), (405, 311), (373, 312)],
@@ -61,6 +61,9 @@ OCCLUDERS=[[(611, 430),
   (585, 481),
   (435, 521),
   (401, 480)]]
+# Cover the entire back, including its right post, over all sampled frames.
+# The prior silhouette accidentally opened a notch along this wooden post.
+OCCLUDERS.append([(605,427),(744,427),(744,523),(605,523)])
 PROTECTED=[(409, 240),
  (390, 261),
  (413, 335),
@@ -79,6 +82,10 @@ PROTECTED=[(409, 240),
  (1000, 459),
  (1270, 497),
  (680, 450),
+ (723,475),
+ (729,488),
+ (736,501),
+ (720,440),
  (625, 550),
  (240, 460)]
 def make_mask():

@@ -27,7 +27,7 @@ def main(request_id):
     def execute(script):
         return subprocess.run(['/usr/bin/python3',('/opt/relax-codex/cabin-backlog/' if script in ['production-retry.py', 'pipeline-one.py', 'finish-production.py', 'try-long-segment.py', 'final-preview-review.py', 'deliver-preview.py', 'head-motion.py', 'source-review.py'] else '/opt/relax-codex/')+script,request_id],
             capture_output=True,text=True,check=True,timeout=600)
-    ledger=Path('/opt/marketplace-analytics/studio-state')/(('derived-' if '-clean-' in request_id or '-fixed-' in request_id or request_id in ('cabin03-snow-v15-20261121','cabin03-snow2-v15-20261121','cabin03-snow3-v13-20261121','cabin03-snow4-v13-20261121','cabin10-snow-v15-20261121','cabin10-snow2-v15-20261121','cabin11-snow-v1-20261121','cabin20-snow-v15-20261122','cabin15-snow-v14-20261122','cabin12-snow-v2-20261122') else 'runway-')+request_id+'.json')
+    ledger=Path('/opt/marketplace-analytics/studio-state')/(('derived-' if '-clean-' in request_id or '-fixed-' in request_id or request_id in ('cabin03-snow-v15-20261121','cabin03-snow2-v15-20261121','cabin03-snow3-v13-20261121','cabin03-snow4-v13-20261121','cabin10-snow-v15-20261121','cabin10-snow2-v15-20261121','cabin11-snow-v1-20261121','cabin20-snow-v15-20261122','cabin20-snow2-v15-20261122','cabin15-snow-v14-20261122','cabin12-snow-v2-20261122') else 'runway-')+request_id+'.json')
     if not ledger.exists():
         save('needs_explicit_generation_request');return
     record=json.loads(ledger.read_text())
