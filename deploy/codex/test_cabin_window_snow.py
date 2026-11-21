@@ -27,6 +27,16 @@ class WindowSnowTests(unittest.TestCase):
   for point in [(680,340),(700,370),(740,395),(1200,360),(1170,395)]:
    self.assertEqual(mask.getpixel(point),0)
   self.assertGreater(mask.getpixel((900,200)),250)
+ @unittest.skipUnless(importlib.util.find_spec('PIL'),'Pillow runs in factory container')
+ def test_conservatory_snow_excludes_chairs_and_wooden_mullions(self):
+  import cabin_window_snow11 as scene
+  from PIL import Image,ImageDraw,ImageChops
+  mask=scene.make_mask();chairs=Image.new('L',mask.size,0)
+  draw=ImageDraw.Draw(chairs)
+  for polygon in scene.OCCLUDERS:draw.polygon(polygon,fill=255)
+  self.assertIsNone(ImageChops.multiply(mask,chairs).getbbox())
+  for point in scene.PROTECTED:self.assertEqual(mask.getpixel(point),0)
+  for point in [(570,250),(695,280),(840,250),(1100,250)]:self.assertGreater(mask.getpixel(point),250)
  def test_border_crop_preserves_aspect_and_moves_qa_regions(self):
   x,y=snow.FRAME_BORDER_CROP
   self.assertEqual((snow.WIDTH-2*x)*9,(snow.HEIGHT-2*y)*16)
