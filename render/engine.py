@@ -871,6 +871,10 @@ def source_fps(visuals: list[Path]) -> int:
 
 
 def _render_breathing(job: Job, s: RenderSettings, say: Progress, tmp: Path) -> Path:
+    if job.voice and (job.voice.parent / "zz-preserved-exhale.json").exists():
+        from render import preserved_exhale
+        import sys
+        return preserved_exhale.render(job, s, say, tmp, sys.modules[__name__])
     if not job.ambient:
         raise ValueError("Для вступления с дыханием нужен фоновый звук")
     say("Раскладываю голос по дыханию", 0.03)

@@ -30,6 +30,16 @@ def channel_of(label):
     label=label.casefold().replace('café','cafe')
     return next((name for name in CHANNELS if name.casefold() in label),'')
 
+def breathing_sources(data,source):
+    """A complete voice + breathing recipe replaces visual clips for Exhale."""
+    folder=Path(data)/source
+    try:
+        settings=json.loads((folder/'breath.json').read_text())
+        voices=list((folder/'voice').iterdir())
+    except (OSError,ValueError):return False
+    return isinstance(settings,dict) and any(p.is_file() and p.suffix.lower() in
+        {'.wav','.mp3','.m4a','.flac','.ogg','.aac'} for p in voices)
+
 class ApprovalQueue:
     def __init__(self, data, jobs, publications, source_dir, label, now, on_ready=None):
         self.data=Path(data);self.jobs=jobs;self.publications=publications
@@ -80,7 +90,8 @@ class ApprovalQueue:
                 else:
                     visual=self.source_dir(source,'visual');tracks=self.source_dir(source,'tracks');ambient=self.source_dir(source,'ambient')
                     missing=[]
-                    if not visual:missing.append('нет исходного клипа для длинной сборки')
+                    breathing=row['channel']=='Exhale to Sleep' and breathing_sources(self.data,source)
+                    if not visual and not breathing:missing.append('нет исходного клипа для длинной сборки')
                     if not tracks and not ambient:missing.append('нет полного набора звука')
                     if row['channel']=='Little Paris Jazz Cafe' and not tracks:missing.append('нужен альбом полных треков, не 30-секундный отрывок')
                     if not row.get('profile'):missing.append('не подключена автоматическая публикация канала')
@@ -128,3 +139,4 @@ def install(app, data, jobs, publications, source_dir, label, now, auth, on_read
             import logging;logging.exception('Cannot reconcile approved production queue')
     reconcile()
     return reconcile
+
