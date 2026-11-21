@@ -100,6 +100,7 @@ def main(rid,recheck=False):
         'not extra frames of this clip. Different rooms are allowed. Historical verdicts '
         'are not proof of a defect in current frames. Active scoped project memory:\n'
         +json.dumps(memory,ensure_ascii=False))
+    prompt += ' Keep limitations to two short sentences; list only actual defects, not every passed rule.'
     run(['systemd-run','--unit=relax-final-qc-'+rid,'--collect','--wait','--pipe',
         '-p','User=relax-codex','-p','WorkingDirectory='+str(w),'-p','MemoryMax=512M',
         '-p','CPUQuota=25%','-p','RuntimeMaxSec=180','--setenv=HOME=/var/lib/relax-codex',

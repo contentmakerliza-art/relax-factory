@@ -70,6 +70,7 @@ def main(request_id):
         'Do not invent defects or assume prior attempt failed. Extra images are historical '
         'references of other clips from this channel, not frames of the current clip. '
         'Different room layouts are allowed. Active scoped memory:\n'+json.dumps(memory,ensure_ascii=False))
+    prompt += ' Keep limitations to two short sentences; list only actual defects, not a checklist of passed rules.'
     if batch:
         prompt += (' The third target image is a native-scale window sheet with six columns: '
             'rows 1-2 show consecutive frames 48-59; rows 3-4 show frames 120-131; rows 5-6 show frames 192-203 at 24 fps. '
