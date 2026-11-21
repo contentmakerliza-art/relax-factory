@@ -19,6 +19,7 @@ class NoRepeatTests(unittest.TestCase):
    write(state/('runway-'+ids[0]+'.json'),{'state':'downloaded_needs_qc'})
    write(root/'assets'/ids[0]/'pipeline.json',{'stage':'rejected_preview','defects':['Нет заметного снегопада за окном']})
    write(root/'assets'/ids[0]/'long-segment.json',{'state':'no_clean_eight_second_segment'})
+   write(root/'assets'/ids[0]/'failure-stage-comparison.json',{'route':'SOURCE_REGENERATE','source_defects':['Нет заметного снегопада за окном']})
    config={'request_group':'cabin05-backlog-20261121','sources':[{'file':'/downloads/source.jpg','runway_prompt':'Fixed scene base','attempts':ids}]}
    submissions=[]
    def execute(args,**kw):
@@ -29,7 +30,7 @@ class NoRepeatTests(unittest.TestCase):
     elif args[1].endswith('pipeline-one.py'):
      write(root/'assets'/ids[1]/'pipeline.json',{'stage':'held_for_motion_and_audio_review','preview':'checked.mp4'})
     else:self.fail('Unexpected expensive operation: '+str(args))
-   with patch.object(producer,'ROOT',root),patch.object(producer,'DOWNLOADS',downloads),patch.object(producer,'STATE',state),patch.object(producer,'media_slot',side_effect=nullcontext),patch.object(producer.backlog,'prepare_geometry'),patch.object(producer,'run',side_effect=execute):
+   with patch.object(producer,'ROOT',root),patch.object(producer,'DOWNLOADS',downloads),patch.object(producer,'STATE',state),patch.object(producer,'compare_failure',return_value={'route':'SOURCE_REGENERATE','source_defects':['Нет заметного снегопада за окном']}),patch.object(producer,'media_slot',side_effect=nullcontext),patch.object(producer.backlog,'prepare_geometry'),patch.object(producer,'run',side_effect=execute):
     producer.work(config,folder);producer.work(config,folder)
    self.assertEqual(len(submissions),1)
    audit=json.loads(next((folder/'corrections').glob('*.json')).read_text())
@@ -44,7 +45,7 @@ class NoRepeatTests(unittest.TestCase):
    write(root/'assets'/ids[0]/'long-segment.json',{'state':'no_clean_eight_second_segment','motion_policy_version':'old-policy'})
    write(root/'assets'/ids[1]/'pipeline.json',{'stage':'held_for_motion_and_audio_review','preview':'checked-preview.mp4'})
    config={'request_group':'cabin05-backlog-20261121','sources':[{'file':'/downloads/source.jpg','attempts':ids}]}
-   with patch.object(producer,'ROOT',root),patch.object(producer,'DOWNLOADS',downloads),patch.object(producer,'STATE',state),patch.object(producer,'media_slot',side_effect=nullcontext),patch.object(producer.backlog,'prepare_geometry'),patch.object(producer,'run') as expensive:
+   with patch.object(producer,'ROOT',root),patch.object(producer,'DOWNLOADS',downloads),patch.object(producer,'STATE',state),patch.object(producer,'compare_failure',return_value={'route':'SOURCE_REGENERATE','source_defects':['Нет заметного снегопада за окном']}),patch.object(producer,'media_slot',side_effect=nullcontext),patch.object(producer.backlog,'prepare_geometry'),patch.object(producer,'run') as expensive:
     producer.work(config,folder);producer.work(config,folder)
     expensive.assert_not_called()
    self.assertEqual(json.loads((folder/'state.json').read_text())['request_id'],ids[1])

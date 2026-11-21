@@ -37,3 +37,9 @@ with (ROOT/'cabin-backlog/media-check.lock').open('a') as lock:
 print('START_FINAL_QA',rid,flush=True)
 p=subprocess.run(['python3',str(ROOT/'cabin-backlog/finish-production.py'),group],capture_output=True,text=True,timeout=1500)
 print(p.stdout,p.stderr[-2000:],flush=True);p.check_returncode();print((folder/'delivery.json').read_text(),flush=True)
+delivered=json.loads((folder/'delivery.json').read_text())
+if delivered.get('stage')=='sent_for_owner_approval':
+ from cabin_failure_routing import record_verified_rebuild
+ with (ROOT/'cabin-backlog/media-check.lock').open('a') as proof_lock:
+  fcntl.flock(proof_lock,fcntl.LOCK_EX)
+  record_verified_rebuild(ROOT,parent,rid,delivered,raw)

@@ -20,6 +20,10 @@ def feedback(root, prior_ids):
         if pipeline.get('stage') not in REJECTED:
             continue
         defects = pipeline.get('defects', [])
+        if pipeline.get('stage')=='rejected_preview':
+            comparison=read(folder/'failure-stage-comparison.json')
+            if comparison.get('route')!='SOURCE_REGENERATE':continue
+            defects=comparison.get('source_defects',[])
         if not defects:
             for name in ('final-preview-qc.json', 'visual-qc.json'):
                 qc = read(folder / name)

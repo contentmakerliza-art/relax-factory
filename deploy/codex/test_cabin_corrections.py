@@ -32,6 +32,8 @@ class CorrectionTests(unittest.TestCase):
    root=Path(tmp)
    for rid,stage in [('old','rejected_preview'),('good','held_for_motion_and_audio_review'),('unrelated','rejected')]:
     p=root/'assets'/rid/'pipeline.json';p.parent.mkdir(parents=True);p.write_text(json.dumps({'stage':stage,'defects':['snow indoors']}))
+   self.assertEqual(c.feedback(root,['old','good']),[])
+   (root/'assets/old/failure-stage-comparison.json').write_text(json.dumps({'route':'SOURCE_REGENERATE','source_defects':['snow indoors']}))
    self.assertEqual([x['request_id'] for x in c.feedback(root,['old','good'])],['old'])
  def test_restart_keeps_frozen_request_even_if_feedback_changes(self):
   with tempfile.TemporaryDirectory() as tmp:

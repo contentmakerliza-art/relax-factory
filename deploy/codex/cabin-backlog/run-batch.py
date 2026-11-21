@@ -29,6 +29,17 @@ def run_group(row,stop):
         (folder/'producer-last-output.log').write_text((result.stdout+result.stderr)[-12000:])
         if result.returncode:raise RuntimeError('Producer exited '+str(result.returncode))
         state=read(folder/'state.json')
+        if state.get('stage')=='assembly_repair_required':
+            rid=state['request_id'];recipe=read(ROOT/'assets'/rid/'recipe-and-checks.json')
+            from cabin_loop_recipe import VERSION as LOOP_VERSION
+            if recipe.get('builder_version')==LOOP_VERSION or '-fixed-' in rid:
+                return dict(stage='assembly_repair_requires_review',request_id=rid,
+                            reason='Already uses repaired loop recipe; do not repeat or regenerate')
+            result=subprocess.run(['/usr/bin/python3',str(ROOT/'repair-saved-cabin.py'),rid],
+                stdin=subprocess.DEVNULL,capture_output=True,text=True,timeout=1800)
+            (folder/'assembly-repair-output.log').write_text((result.stdout+result.stderr)[-9000:])
+            if result.returncode:raise RuntimeError('Assembly repair needs inspection')
+            return read(folder/'delivery.json')
         if state.get('stage') in OUTAGE:stop.set()
         if state.get('stage')!='preview_ready_for_final_checks':return state
         result=subprocess.run(['/usr/bin/python3',str(BASE/'finish-production.py'),group],

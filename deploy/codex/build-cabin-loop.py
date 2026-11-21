@@ -75,7 +75,12 @@ def main(rid):
     for src,dst in [(source,prefix+'/source.mp4'),(ROOT/'assets/cabin-approved-fireplace-9.wav',prefix+'/audio.wav'),
                     (ROOT/'cabin_loop_recipe.py','/tmp/cabin_loop_recipe.py')]:
         run(['docker','cp',str(src),'relax-factory:'+dst])
-    result=run(['docker','exec','-i','relax-factory','python','-',rid],input=CODE,timeout=900)
+    try:
+        result=run(['docker','exec','-i','relax-factory','python','-',rid],input=CODE,timeout=900)
+    except subprocess.CalledProcessError as error:
+        (folder/'loop-build-error.json').write_text(json.dumps({'error':error.stderr[-5000:],
+            'stdout':error.stdout[-1000:],'builder_version':VERSION},ensure_ascii=False,indent=2))
+        raise RuntimeError('Cyclic master build failed: '+error.stderr[-1200:]) from error
     report=json.loads(result.stdout)
     report.update(preview=str(folder/'preview.mp4'),loop_master=str(folder/'loop-master.mp4'),
                   audio_source=str(ROOT/'assets/cabin-approved-fireplace-9.wav'))

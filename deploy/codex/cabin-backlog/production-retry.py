@@ -3,6 +3,7 @@ from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parent.parent))
 import cabin_backlog_registry as backlog
 import cabin_corrections
+from cabin_failure_routing import action as failure_action
 """Bounded server production: three Runway attempts per source, then a new image.
 
 Runs only explicitly staged configurations. Good previews remain held for final
@@ -63,6 +64,11 @@ def run(args, timeout=3600):
 
 def read(path):
     return json.loads(path.read_text()) if path.exists() else None
+
+
+def compare_failure(request_id):
+    with media_slot():
+        return json.loads(run(['/usr/bin/python3',str(ROOT/'compare-cabin-stages.py'),request_id],timeout=480).stdout)
 
 
 def main(config_path):
@@ -220,6 +226,13 @@ def work(config, folder):
                 save('preview_ready_for_final_checks', request_id=request_id,
                      preview=prior['preview'], owner_approval=False)
                 return
+            if prior and prior['stage']=='rejected_preview':
+                comparison=compare_failure(request_id)
+                route=failure_action(prior['stage'],comparison)
+                if route!='source_retry':
+                    save('assembly_repair_required' if route=='assembly_repair' else 'failure_cause_requires_review',
+                         request_id=request_id,comparison=comparison)
+                    return
             if prior and prior['stage'] in ('rejected', 'rejected_motion', 'rejected_preview'):
                 completed += 1
                 if salvage(request_id):return
@@ -298,6 +311,9 @@ def work(config, folder):
                 save('technical_attention_required', request_id=request_id, pipeline=read(pipeline))
                 return
             checked = read(pipeline)
+            if checked['stage']=='held_for_snow_evidence':
+                save('quality_evidence_requires_review',request_id=request_id)
+                return
             if checked['stage'] in ('rejected', 'rejected_motion', 'rejected_preview'):
                 completed += 1
                 if salvage(request_id):return

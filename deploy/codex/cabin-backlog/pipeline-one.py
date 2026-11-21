@@ -70,7 +70,7 @@ def main(request_id):
         if report['technical_check']!='passed':raise ValueError('Technical check missing')
         save('held_for_motion_and_audio_review',preview=str(preview),delivery='NOT_SENT')
     except Exception as exc:
-        save('failed_no_auto_retry',error=type(exc).__name__)
+        save('failed_no_auto_retry',error=type(exc).__name__,detail=(getattr(exc,'stderr','') or str(exc))[-3500:])
         raise
 
 
