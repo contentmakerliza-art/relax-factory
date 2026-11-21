@@ -311,6 +311,9 @@ def work(config, folder):
                 save('technical_attention_required', request_id=request_id, pipeline=read(pipeline))
                 return
             checked = read(pipeline)
+            if checked['stage']=='window_snow_compositing_required':
+                save('window_snow_compositing_required',request_id=request_id,action='Prepare or reuse scene-specific glass mask; do not regenerate Runway')
+                return
             if checked['stage']=='held_for_snow_evidence':
                 save('quality_evidence_requires_review',request_id=request_id)
                 return

@@ -72,6 +72,9 @@ def finish(group,folder):
     save('waiting_for_checked_preview',previous_stage=(old or {}).get('stage'))
     while time.monotonic()<deadline:
         state=read(folder/'state.json') or {}
+        if state.get('stage')=='window_snow_compositing_required':
+            save('awaiting_window_snow_mask',request_id=state.get('request_id'),action='Composite existing Snow before final preview checks')
+            return
         if state.get('stage') in ('prepared_source_pool_exhausted','provider_unavailable_no_image_purchase',
             'model_unavailable_no_retry','submission_slots_exhausted_no_image_purchase',
             'technical_attention_required','preparation_failed_no_submission','recover_existing_video','recover_existing_image'):
@@ -141,10 +144,15 @@ def finish(group,folder):
             audio_correlation=media['audio_correlation'],approved_audio_source=str(audio),
             real_time_playback_performed=False,listening_performed=False,
             limitations='Numerical full-sequence checks and sampled visual analysis; owner approval is still required.')
+        if built.get('window_snow_overlay'):
+            ready.update(local_masks=True,mask_scope='exterior_window_glass_only',fireplace_masks=False,
+                         window_snow_overlay=True)
         (assets/'owner-review-ready.json').write_text(json.dumps(ready,indent=2))
         run(['docker','cp',str(assets/'owner-review-ready.json'),'relax-factory:'+prefix+'/owner-review-ready.json'])
         day=group[5:7];scene=config['scene_title']
         label=f'Quiet Pines Cabin — {int(day)} декабря — {scene} — серверная проба — 30 секунд'
+        if built.get('window_snow_overlay'):
+            label=f'Quiet Pines Cabin — {int(day)} декабря — {scene} — снег за окнами — 30 секунд'
         args=['docker','exec','relax-factory','python','/tmp/deliver-preview.py','--request-id',rid,'--label',label]
         registration=json.loads(run(args+['--register-only']).stdout)
         registration=registration.get('held_existing_delivery',registration)
@@ -163,6 +171,8 @@ def finish(group,folder):
             manifest.update(publication_loop_mode='repeat',loop_crossfade_seconds=0,
                 loop_builder_version=recipe['loop_builder_version'],loop_master_path=str(assets/'loop-master.mp4'),
                 loop_master_sha256=recipe['loop_master_sha256'])
+        if built.get('window_snow_overlay'):
+            manifest.update(window_snow_overlay=True,mask_scope='exterior_window_glass_only',fireplace_masks=False)
         from christmas_titles import title_for
         manifest['title']=title_for(manifest['channel'],manifest['title'])
         from public_metadata import description_for,tags_for

@@ -11,7 +11,7 @@ producer=load('production-retry');finisher=load('finish-production')
 def write(path,value):
  path.parent.mkdir(parents=True,exist_ok=True);path.write_text(json.dumps(value))
 class NoRepeatTests(unittest.TestCase):
- def test_next_submission_uses_specific_previous_defect(self):
+ def test_missing_snow_never_submits_another_runway_generation(self):
   with tempfile.TemporaryDirectory() as tmp:
    root=Path(tmp);downloads=root/'downloads';downloads.mkdir();(downloads/'source.jpg').write_bytes(b'source')
    folder=root/'run';folder.mkdir();state=root/'state';state.mkdir()
@@ -25,16 +25,17 @@ class NoRepeatTests(unittest.TestCase):
    def execute(args,**kw):
     if args[1].endswith('await-syntx.py'):
      req=json.loads(Path(args[3]).read_text());submissions.append(req)
-     self.assertIn('Dense, abundant snowfall',req['prompt'])
+     self.fail('Snow defects must be repaired at assembly, not generated again')
      write(state/('runway-'+ids[1]+'.json'),{'state':'downloaded_needs_qc'})
     elif args[1].endswith('pipeline-one.py'):
      write(root/'assets'/ids[1]/'pipeline.json',{'stage':'held_for_motion_and_audio_review','preview':'checked.mp4'})
     else:self.fail('Unexpected expensive operation: '+str(args))
    with patch.object(producer,'ROOT',root),patch.object(producer,'DOWNLOADS',downloads),patch.object(producer,'STATE',state),patch.object(producer,'compare_failure',return_value={'route':'SOURCE_REGENERATE','source_defects':['Нет заметного снегопада за окном']}),patch.object(producer,'media_slot',side_effect=nullcontext),patch.object(producer.backlog,'prepare_geometry'),patch.object(producer,'run',side_effect=execute):
     producer.work(config,folder);producer.work(config,folder)
-   self.assertEqual(len(submissions),1)
+   self.assertEqual(len(submissions),0)
    audit=json.loads(next((folder/'corrections').glob('*.json')).read_text())
    self.assertEqual(audit['evidence'][0]['request_id'],ids[0])
+   self.assertEqual(audit['repair_route'],'ASSEMBLY_REPAIR')
  def test_restart_and_policy_change_skip_rejected_media_and_cached_trim(self):
   with tempfile.TemporaryDirectory() as tmp:
    root=Path(tmp);downloads=root/'downloads';downloads.mkdir();(downloads/'source.jpg').write_bytes(b'source')
@@ -50,6 +51,15 @@ class NoRepeatTests(unittest.TestCase):
     expensive.assert_not_called()
    self.assertEqual(json.loads((folder/'state.json').read_text())['request_id'],ids[1])
    self.assertEqual(json.loads((root/'assets'/ids[0]/'pipeline.json').read_text())['stage'],'rejected_preview')
+ def test_finisher_waits_for_mask_without_rendering_raw_animation(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   root=Path(tmp);folder=root/'run';folder.mkdir();group='cabin05-backlog-20261121'
+   write(folder/'state.json',{'stage':'window_snow_compositing_required','request_id':'new'})
+   write(root/'production-configs'/(group+'.json'),{})
+   with patch.object(finisher,'ROOT',root),patch.object(finisher,'run') as expensive,patch.object(finisher.time,'sleep') as wait:
+    finisher.finish(group,folder)
+    expensive.assert_not_called();wait.assert_not_called()
+   self.assertEqual(json.loads((folder/'delivery.json').read_text())['stage'],'awaiting_window_snow_mask')
  def test_finisher_returns_immediately_for_known_rejection_after_restart(self):
   with tempfile.TemporaryDirectory() as tmp:
    root=Path(tmp);folder=root/'run';folder.mkdir();rid='cabin05-fullframe-v1-20261121';group='cabin05-backlog-20261121'

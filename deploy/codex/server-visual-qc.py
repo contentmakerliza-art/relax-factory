@@ -35,6 +35,9 @@ def main(request_id):
     u=pwd.getpwnam('relax-codex')
     import cabin_backlog_registry as backlog
     batch=bool(backlog.attempt(request_id))
+    from snow_policy import raw_snow_deferred
+    ledger_path=Path('/opt/marketplace-analytics/studio-state')/('runway-'+request_id+'.json')
+    deferred=raw_snow_deferred(request_id,json.loads(ledger_path.read_text()) if ledger_path.exists() else {})
     if batch:
         crop=backlog.geometry(request_id)['snow_crop']
         run('docker','exec','relax-factory','ffmpeg','-nostdin','-v','error','-y','-threads','1',
@@ -82,6 +85,11 @@ def main(request_id):
         prompt += (' Owner specifically rejected a bright window-shaped reflection in the fireplace and repeated cat movement. '
                    'Reject any visible window-shaped rectangle/reflection inside the firebox even if it was present in the source image. '
                    'Compare head angle, ear position and chin placement across the sequence; minute breathing must not move head or paws.')
+    if deferred:
+        prompt += (' STAGE OVERRIDE: this is a raw animation made for a separate Snow layer at assembly. '
+                   'Absence or uncertainty of outdoor falling flakes is allowed at this raw stage, not a defect. '
+                   'Still reject real indoor particles, malformed objects, camera motion or broken flames. '
+                   'The finished composited preview must separately pass the full snowfall check.')
     cmd=['systemd-run','--unit=relax-qc-'+request_id,'--collect','--wait','--pipe',
          '-p','User=relax-codex','-p','WorkingDirectory='+str(workspace),'-p','MemoryMax=512M',
          '-p','CPUQuota=25%','-p','RuntimeMaxSec=180','--setenv=HOME=/var/lib/relax-codex',
@@ -92,8 +100,8 @@ def main(request_id):
          *[arg for ref in references for arg in ['--image',ref]],
          '--output-schema',str(workspace/'schema.json'),'-o',str(output),prompt]
     subprocess.run(cmd,stdin=subprocess.DEVNULL,capture_output=True,text=True,timeout=210,check=True)
-    report=json.loads(output.read_text());report['memory_policy_fingerprint']=memory['policy_fingerprint']
-    if batch and report['outdoor_snow']=='ABSENT':
+    report=json.loads(output.read_text());report['memory_policy_fingerprint']=memory['policy_fingerprint'];report['snow_required']=not deferred
+    if batch and not deferred and report['outdoor_snow']=='ABSENT':
         report['verdict']='REJECT'
         if not report['defects']:report['defects']=['На исходной анимации нет заметного снегопада снаружи']
     (root/'visual-qc.json').write_text(json.dumps(report,ensure_ascii=False,indent=2))

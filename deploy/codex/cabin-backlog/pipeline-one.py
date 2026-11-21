@@ -44,7 +44,7 @@ def main(request_id):
         if not qcpath.exists():
             save('checking_frames');execute('server-visual-qc.py')
         qc=json.loads(qcpath.read_text())
-        if qc.get('outdoor_snow')=='UNCERTAIN':
+        if qc.get('snow_required',True) and qc.get('outdoor_snow')=='UNCERTAIN':
             save('held_for_snow_evidence',defects=qc.get('defects',[]));return
         if qc['verdict']=='REJECT':
             save('rejected',defects=qc['defects']);return
@@ -62,6 +62,10 @@ def main(request_id):
             if moving:
                 # Owner requests visual triage, not rejection from template fit alone.
                 (folder/'numeric-motion-flags.json').write_text(json.dumps({'regions':moving,'metrics':motion,'requires_visual_review':True},indent=2))
+        if qc.get('snow_required') is False:
+            save('window_snow_compositing_required',source=str(Path('/opt/marketplace-analytics/studio-downloads')/(request_id+'.mp4')),
+                 action='Use scene-specific glass and foreground masks, then run final preview QC; no Snow regeneration')
+            return
         preview=folder/'preview.mp4'
         if not preview.exists():
             save('building_preview');execute('server-preview.py')

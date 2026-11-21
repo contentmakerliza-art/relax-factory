@@ -4,7 +4,7 @@ import json
 import re
 from pathlib import Path
 
-VERSION = '2026-11-21-dense-visible-snow-v3'
+VERSION = '2026-11-22-cabin-snow-at-assembly-v1'
 REJECTED = {'rejected', 'rejected_motion', 'rejected_preview'}
 
 
@@ -64,8 +64,8 @@ def classify(text):
 
 
 VIDEO = {
-    'outdoor_snow': 'Dense, abundant snowfall is immediately obvious across the entire outdoor view for the full shot. Hundreds of small distinct flakes drift diagonally in gentle changing wind behind closed window glass; the mountain or forest view stays readable.',
-    'indoor_snow': 'Snowfall stays in the distant exterior behind closed window glass. The room air stays completely clear; chairs, upholstery and ceiling beams stay dry and sharply visible in front of the windows.',
+    
+    
     'cat_motion': 'The sleeping cat keeps the exact same head angle, relaxed ears, paws and tail throughout. Its chin rests on its paws. Only the flank breathes imperceptibly slowly.',
     'camera': 'A rigid locked tripod holds one identical composition and perspective for the entire shot.',
     'geometry': 'The window frames, stonework, furniture edges and books remain rigid and sharply aligned throughout; the original scene geometry stays unchanged.',
@@ -73,8 +73,8 @@ VIDEO = {
     'fireplace': 'Animate the flames of the existing fireplace while preserving the shape and position of its firebox, logs and stonework. The small flames move naturally inside the original opening.',
 }
 IMAGE = {
-    'outdoor_snow': 'Show dense, abundant exterior snowfall: many small distinct flakes across the entire outdoor view, immediately visible against distant trees, with the landscape readable through closed windows.',
-    'indoor_snow': 'Keep the indoor air, ceiling, chairs and upholstery clear and dry; all falling snow belongs to the exterior behind closed window glass.',
+    
+    
     'cat_motion': 'Keep the cat naturally curled asleep with its chin supported on its paws and relaxed ears, in a compact stable pose suitable for nearly still animation.',
     'camera': 'Preserve the original fixed camera framing and perspective.',
     'geometry': 'Preserve coherent rigid geometry and clear single edges of the existing windows, furniture and masonry.',
@@ -82,13 +82,8 @@ IMAGE = {
     'fireplace': 'Preserve the shape of the existing fireplace, its firebox, logs and stonework, with a small natural wood fire inside the original opening.',
 }
 
-COMPACT_VIDEO_BASE = (
-    'Locked tripod, fixed composition throughout. The curled sleeping cat keeps its head, '
-    'ears, paws and tail still, with barely perceptible flank breathing. Animate the existing '
-    'wood flames within the unchanged firebox and logs. Furniture and masonry remain rigid. '
-    'Dense abundant snowfall with many small flakes stays outdoors behind closed windows. Clear dry indoor air; '
-    'minimal plausible reflections and natural firelight.'
-)
+from snow_policy import CABIN_VIDEO_BASE
+COMPACT_VIDEO_BASE = CABIN_VIDEO_BASE
 
 
 def plan(base_prompt, evidence, kind):
@@ -102,10 +97,10 @@ def plan(base_prompt, evidence, kind):
             if not matched:
                 unknown.append(defect)
     # Editing a generation prompt cannot fix an audio or assembly-only defect.
-    hold = bool(unknown) or bool(kinds & {'assembly', 'audio'})
+    hold = bool(unknown) or bool(kinds & {'assembly', 'audio', 'outdoor_snow', 'indoor_snow'})
     focused = [k for k in rules if k in kinds]
-    # Required on the first attempt too; keep defect categories evidence-based.
-    if 'outdoor_snow' not in focused:focused.insert(0,'outdoor_snow')
+    # Snow defects belong to compositing, never another generation.
+    if kind == 'video':base_prompt = COMPACT_VIDEO_BASE
     corrections = [rules[k] for k in focused]
     prompt = ' '.join(corrections + [base_prompt]) if corrections else base_prompt
     applied = list(focused)
@@ -123,6 +118,8 @@ def plan(base_prompt, evidence, kind):
         raise ValueError('Corrected Runway prompt exceeds provider limit')
     return {'version': VERSION, 'kind': kind, 'categories': sorted(kinds),
             'applied_focused_categories': applied,
+            'snow_stage': 'assembly',
+            'repair_route': 'ASSEMBLY_REPAIR' if kinds & {'outdoor_snow','indoor_snow'} else None,
             'evidence': evidence, 'unknown_defects': unknown, 'requires_review': hold,
             'base_prompt_sha256': hashlib.sha256(base_prompt.encode()).hexdigest(),
             'prompt': prompt}
