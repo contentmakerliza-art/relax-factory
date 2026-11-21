@@ -22,7 +22,7 @@ def entry(rid,job=None):
     parent=rid.replace('-clean-','-fullframe-').replace('-fixed-','-fullframe-')
     if rid in ('cabin03-snow-v15-20261121','cabin03-snow2-v15-20261121'):parent='cabin03-fullframe-v15-20261121'
     if rid in ('cabin03-snow3-v13-20261121','cabin03-snow4-v13-20261121'):parent='cabin03-fullframe-v13-20261121'
-    if rid=='cabin10-snow-v15-20261121':parent='cabin10-fullframe-v15-20261121'
+    if rid in ('cabin10-snow-v15-20261121','cabin10-snow2-v15-20261121'):parent='cabin10-fullframe-v15-20261121'
     for row in records():
         if job is not None and row['request_group']!=job:continue
         for index,source in enumerate(row['sources']):

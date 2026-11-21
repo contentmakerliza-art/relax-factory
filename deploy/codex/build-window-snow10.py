@@ -46,7 +46,7 @@ limited(['ffmpeg','-y','-stream_loop','-1','-i',str(base/'loop-master.mp4'),'-i'
  '-r','24','-c:v','libx264','-preset','fast','-crf','19','-c:a','aac','-b:a','192k','-movflags','+faststart',str(base/'preview.mp4')])
 loop=engine.probe_duration(base/'loop-master.mp4')
 if abs(loop-expected_loop_frames(round(duration*24))/24)>.05:raise ValueError('Cycle mismatch')
-report=dict(builder_version=VERSION,composition_version='window-snow-prototype-v4',request_id=REQUEST,parent_request_id=PARENT,
+report=dict(builder_version=VERSION,composition_version='window-snow-chair-exclusion-v2',occlusion_policy='sampled-chair-silhouette-union-plus-4-source-pixels',request_id=REQUEST,parent_request_id=PARENT,
  source_seconds=duration,source_frames=round(duration*24),loop_seconds=loop,loop_frames=round(loop*24),crossfade_seconds=.75,
  full_frame_only=True,local_masks=True,mask_scope='exterior_window_glass_only',fireplace_masks=False,window_snow_overlay=True,
  technical_check='passed',frame_border_crop_pixels=[48,27],preview_repeat='exact_cyclic_master',publication_loop_mode='repeat',publication_crossfade=0,
