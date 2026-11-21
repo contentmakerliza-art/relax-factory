@@ -27,7 +27,7 @@ def main(request_id):
     def execute(script):
         return subprocess.run(['/usr/bin/python3',('/opt/relax-codex/cabin-backlog/' if script in ['production-retry.py', 'pipeline-one.py', 'finish-production.py', 'try-long-segment.py', 'final-preview-review.py', 'deliver-preview.py', 'head-motion.py', 'source-review.py'] else '/opt/relax-codex/')+script,request_id],
             capture_output=True,text=True,check=True,timeout=600)
-    ledger=Path('/opt/marketplace-analytics/studio-state')/(('derived-' if '-clean-' in request_id else 'runway-')+request_id+'.json')
+    ledger=Path('/opt/marketplace-analytics/studio-state')/(('derived-' if '-clean-' in request_id or '-fixed-' in request_id else 'runway-')+request_id+'.json')
     if not ledger.exists():
         save('needs_explicit_generation_request');return
     record=json.loads(ledger.read_text())
@@ -44,6 +44,8 @@ def main(request_id):
         if not qcpath.exists():
             save('checking_frames');execute('server-visual-qc.py')
         qc=json.loads(qcpath.read_text())
+        if qc.get('outdoor_snow')=='UNCERTAIN':
+            save('held_for_snow_evidence',defects=qc.get('defects',[]));return
         if qc['verdict']=='REJECT':
             save('rejected',defects=qc['defects']);return
         if qc['verdict']!='NEEDS_MOTION_REVIEW':
@@ -52,7 +54,7 @@ def main(request_id):
             motion_path=folder/'head-motion.json'
             if not motion_path.exists() or 'flank' not in json.loads(motion_path.read_text()):
                 save('checking_cat_motion')
-                subprocess.run(['docker','cp','/opt/relax-codex/head-motion.py','relax-factory:/tmp/head-motion.py'],check=True,capture_output=True)
+                subprocess.run(['docker','cp','/opt/relax-codex/cabin-backlog/head-motion.py','relax-factory:/tmp/head-motion.py'],check=True,capture_output=True)
                 result=subprocess.run(['docker','exec','relax-factory','python','/tmp/head-motion.py',request_id],check=True,capture_output=True,text=True,timeout=90)
                 motion_path.write_text(json.dumps(json.loads(result.stdout),indent=2))
             motion=json.loads(motion_path.read_text())

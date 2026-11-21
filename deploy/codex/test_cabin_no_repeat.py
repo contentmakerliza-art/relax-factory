@@ -24,7 +24,7 @@ class NoRepeatTests(unittest.TestCase):
    def execute(args,**kw):
     if args[1].endswith('await-syntx.py'):
      req=json.loads(Path(args[3]).read_text());submissions.append(req)
-     self.assertIn('Clearly visible continuous snowfall',req['prompt'])
+     self.assertIn('Dense, abundant snowfall',req['prompt'])
      write(state/('runway-'+ids[1]+'.json'),{'state':'downloaded_needs_qc'})
     elif args[1].endswith('pipeline-one.py'):
      write(root/'assets'/ids[1]/'pipeline.json',{'stage':'held_for_motion_and_audio_review','preview':'checked.mp4'})

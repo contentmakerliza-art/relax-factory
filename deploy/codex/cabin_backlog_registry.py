@@ -18,7 +18,7 @@ def group(value):
     return any(r['request_group']==value for r in records())
 
 def entry(rid,job=None):
-    parent=rid.replace('-clean-','-fullframe-')
+    parent=rid.replace('-clean-','-fullframe-').replace('-fixed-','-fullframe-')
     for row in records():
         if job is not None and row['request_group']!=job:continue
         for index,source in enumerate(row['sources']):

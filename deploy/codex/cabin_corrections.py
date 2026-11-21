@@ -4,7 +4,7 @@ import json
 import re
 from pathlib import Path
 
-VERSION = '2026-11-21-defect-feedback-v2'
+VERSION = '2026-11-21-dense-visible-snow-v3'
 REJECTED = {'rejected', 'rejected_motion', 'rejected_preview'}
 
 
@@ -60,7 +60,7 @@ def classify(text):
 
 
 VIDEO = {
-    'outdoor_snow': 'Clearly visible continuous snowfall fills the outdoor view throughout the shot: many distinct small flakes move across the darker distant trees behind the window glass, carried diagonally by gentle wind.',
+    'outdoor_snow': 'Dense, abundant snowfall is immediately obvious across the entire outdoor view for the full shot. Hundreds of small distinct flakes drift diagonally in gentle changing wind behind closed window glass; the mountain or forest view stays readable.',
     'indoor_snow': 'Snowfall stays in the distant exterior behind closed window glass. The room air stays completely clear; chairs, upholstery and ceiling beams stay dry and sharply visible in front of the windows.',
     'cat_motion': 'The sleeping cat keeps the exact same head angle, relaxed ears, paws and tail throughout. Its chin rests on its paws. Only the flank breathes imperceptibly slowly.',
     'camera': 'A rigid locked tripod holds one identical composition and perspective for the entire shot.',
@@ -69,7 +69,7 @@ VIDEO = {
     'fireplace': 'Animate the flames of the existing fireplace while preserving the shape and position of its firebox, logs and stonework. The small flames move naturally inside the original opening.',
 }
 IMAGE = {
-    'outdoor_snow': 'Make the exterior snowfall clearly visible as many small flakes against darker distant trees, with the landscape readable through closed windows.',
+    'outdoor_snow': 'Show dense, abundant exterior snowfall: many small distinct flakes across the entire outdoor view, immediately visible against distant trees, with the landscape readable through closed windows.',
     'indoor_snow': 'Keep the indoor air, ceiling, chairs and upholstery clear and dry; all falling snow belongs to the exterior behind closed window glass.',
     'cat_motion': 'Keep the cat naturally curled asleep with its chin supported on its paws and relaxed ears, in a compact stable pose suitable for nearly still animation.',
     'camera': 'Preserve the original fixed camera framing and perspective.',
@@ -82,7 +82,7 @@ COMPACT_VIDEO_BASE = (
     'Locked tripod, fixed composition throughout. The curled sleeping cat keeps its head, '
     'ears, paws and tail still, with barely perceptible flank breathing. Animate the existing '
     'wood flames within the unchanged firebox and logs. Furniture and masonry remain rigid. '
-    'Visible fine snowfall stays outdoors behind closed windows. Clear dry indoor air; '
+    'Dense abundant snowfall with many small flakes stays outdoors behind closed windows. Clear dry indoor air; '
     'minimal plausible reflections and natural firelight.'
 )
 
@@ -100,6 +100,8 @@ def plan(base_prompt, evidence, kind):
     # Editing a generation prompt cannot fix an audio or assembly-only defect.
     hold = bool(unknown) or bool(kinds & {'assembly', 'audio'})
     focused = [k for k in rules if k in kinds]
+    # Required on the first attempt too; keep defect categories evidence-based.
+    if 'outdoor_snow' not in focused:focused.insert(0,'outdoor_snow')
     corrections = [rules[k] for k in focused]
     prompt = ' '.join(corrections + [base_prompt]) if corrections else base_prompt
     applied = list(focused)

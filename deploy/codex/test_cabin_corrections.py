@@ -9,7 +9,7 @@ class CorrectionTests(unittest.TestCase):
   defects=['Нет заметного снегопада','Снег внутри комнаты','Кот шевелит головой','Деформация кладки','Камера движется','Яркое отражение в топке']
   p=c.plan('Original detailed scene. '*40,[{'request_id':'old','defects':defects}],'video')
   self.assertLessEqual(len(p['prompt']),1000);self.assertIn('Locked tripod',p['prompt'])
-  self.assertIn('Clearly visible continuous snowfall',p['prompt']);self.assertTrue(p['prompt'].endswith('.'))
+  self.assertIn('Dense, abundant snowfall',p['prompt']);self.assertTrue(p['prompt'].endswith('.'))
  def test_real_particle_report_and_word_kotoroe_are_not_cat_motion(self):
   text='Внутри комнаты видны светлые размытые частицы поверх кресла, которое перекрывает окно, и на деревянном потолке.'
   p=c.plan('Base',[{'request_id':'old','defects':[text]}],'video')
@@ -20,7 +20,7 @@ class CorrectionTests(unittest.TestCase):
   self.assertEqual(p['categories'],['indoor_snow']);self.assertIn('room air stays completely clear',p['prompt']);self.assertFalse(p['requires_review'])
  def test_missing_snow_is_not_misclassified_as_indoor(self):
   p=c.plan('Base',[{'request_id':'old','defects':['На 20 фрагментах окна падающие снежинки не различимы.']}],'video')
-  self.assertEqual(p['categories'],['outdoor_snow']);self.assertIn('continuous snowfall',p['prompt'])
+  self.assertEqual(p['categories'],['outdoor_snow']);self.assertIn('abundant snowfall',p['prompt'])
  def test_cat_motion_and_geometry_have_distinct_fixes(self):
   p=c.plan('Base',[{'request_id':'old','defects':['Кот поворачивает голову и уши.','Двоение контуров кладки и мебели.']}],'video')
   self.assertEqual(p['categories'],['cat_motion','geometry']);self.assertIn('exact same head angle',p['prompt']);self.assertIn('sharply aligned',p['prompt'])

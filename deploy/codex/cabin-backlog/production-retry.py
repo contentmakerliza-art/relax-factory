@@ -177,6 +177,9 @@ def work(config, folder):
             generation = read(ledger)
             pipeline = ROOT / 'assets' / request_id / 'pipeline.json'
             prior = read(pipeline)
+            if prior and prior.get('stage')=='held_for_snow_evidence':
+                save('quality_evidence_requires_review',request_id=request_id)
+                return
             # A code/policy version change must never erase a durable rejection.
             # Reconsider this exact media only on an explicit, one-use request.
             if prior and prior.get('stage') in ('rejected','rejected_motion','rejected_preview') and prior.get('recheck_requested') is True:

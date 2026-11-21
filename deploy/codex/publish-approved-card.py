@@ -43,6 +43,9 @@ def main(job_id):
                        ('file',Path('/tmp/cabin-full-fireplace-9.wav'),'audio/wav'))
         if audio['sha256']!=manifest['audio_sha256'] or audio['seconds']<100:
             raise ValueError('Complete approved audio is missing')
+        if manifest.get('publication_loop_mode')=='repeat':
+            from cabin_loop_recipe import install_verified_master
+            install_verified_master(folder,Path('/tmp')/('codex-loop-master-'+job_id+'.mp4'),manifest)
     else:
         if len(manifest.get('full_tracks',[]))<6:raise ValueError('Full musical album required')
         for track in manifest['full_tracks']:
@@ -63,6 +66,9 @@ def main(job_id):
                             loop_crossfade=.75 if manifest['profile']=='Quiet_Pines' else 0,
                             width=1920,height=1080,fps=24,find_loop_point=False,
                             stabilize=False,smooth=False,speed=1,stab_mask='')
+    if manifest.get('publication_loop_mode')=='repeat':
+        if manifest['profile']!='Quiet_Pines':raise ValueError('Cyclic recipe is scoped to Cabin')
+        meta['settings'].update(loop_mode='repeat',loop_crossfade=0)
     if manifest['profile']=='Little_Paris_Jazz_Cafe':
         meta['settings'].update(loudness=-19,track_crossfade=3,shuffle_tracks=False,logo='')
         meta['tracks']=len(manifest['full_tracks'])

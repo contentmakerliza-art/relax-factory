@@ -109,6 +109,12 @@ def finish(group,folder):
         if moving:(assets/'numeric-motion-flags.json').write_text(json.dumps({'regions':moving,'metrics':motion,'requires_visual_review':True},indent=2))
         if not defects:
             visual=json.loads(run(['/usr/bin/python3',str(ROOT/'cabin-backlog'/'final-preview-review.py'),rid],timeout=300).stdout)
+            if visual.get('outdoor_snow')=='UNCERTAIN':
+                pipeline=read(assets/'pipeline.json');pipeline.update(stage='held_for_snow_evidence',updated=time.time(),defects=visual['defects'])
+                (assets/'pipeline.json').write_text(json.dumps(pipeline,ensure_ascii=False,indent=2))
+                save('quality_evidence_requires_review',request_id=rid,
+                     reason='Snow evidence uncertain; do not spend another generation on uncertainty')
+                return
             if visual['verdict']!='READY_FOR_OWNER_PREVIEW':defects+=visual['defects'] or ['Visual prescreen rejected']
         if defects:
             pipeline=read(assets/'pipeline.json');pipeline.update(stage='rejected_preview',defects=defects,updated=time.time(),motion_policy_version=VERSION)
@@ -116,6 +122,12 @@ def finish(group,folder):
             rejected.add(rid);save('retrying_after_preview_rejection',request_id=rid,defects=defects)
             save('deferred_after_preview_rejection',request_id=rid,defects=defects)
             return
+        built=read(assets/'recipe-and-checks.json') or {}
+        if built.get('publication_loop_mode')=='repeat':
+            for src,dst in [(assets/'recipe-and-checks.json',prefix+'/recipe-and-checks.json'),
+                            (assets/'loop-master.mp4',prefix+'/loop-master.mp4'),
+                            (ROOT/'cabin_loop_recipe.py','/tmp/cabin_loop_recipe.py')]:
+                run(['docker','cp',str(src),'relax-factory:'+dst])
         recipe=json.loads(run(['docker','exec','relax-factory','python','/tmp/check-publication-loop.py',rid]).stdout)
         (assets/'publication-loop-check.json').write_text(json.dumps(recipe,indent=2))
         run(['docker','exec','relax-factory','ffmpeg','-nostdin','-v','error','-y','-threads','1',
@@ -145,6 +157,10 @@ def finish(group,folder):
             title=config['english_title']+' & Crackling Fireplace | Sleeping Cat | 3 Hours',
             description='Relax in a warm wooden cabin with a sleeping cat, a crackling fireplace and snowfall outside the closed windows.\n\nThree hours of fireplace ambience for reading, relaxing and winding down. No music or wind in the audio.\n\nThis scene was created with AI and edited for Quiet Pines Cabin.',
             tags='cozy cabin, crackling fireplace, fireplace sounds, sleeping cat, snowy forest, winter ambience, relaxing ambience, quiet pines cabin')
+        if recipe.get('publication_loop_mode')=='repeat':
+            manifest.update(publication_loop_mode='repeat',loop_crossfade_seconds=0,
+                loop_builder_version=recipe['loop_builder_version'],loop_master_path=str(assets/'loop-master.mp4'),
+                loop_master_sha256=recipe['loop_master_sha256'])
         from christmas_titles import title_for
         manifest['title']=title_for(manifest['channel'],manifest['title'])
         from public_metadata import description_for,tags_for

@@ -55,6 +55,12 @@ def promote(job_id):
     inputs.append((ROOT/'public_metadata.py','/tmp/public_metadata.py'))
     if config['profile']=='Quiet_Pines':
         inputs.append((ROOT/'assets/cabin-approved-fireplace-9.wav','/tmp/cabin-full-fireplace-9.wav'))
+        if config.get('publication_loop_mode')=='repeat':
+            inputs.append((ROOT/'cabin_loop_recipe.py','/tmp/cabin_loop_recipe.py'))
+            master=Path(config['loop_master_path']).resolve()
+            if master.parent.parent!=ROOT/'assets' or master.name!='loop-master.mp4':
+                raise ValueError('Cyclic master outside protected production assets')
+            inputs.append((master,'/tmp/codex-loop-master-'+job_id+'.mp4'))
     for source,target in inputs:
         subprocess.run(['docker','cp',str(source),'relax-factory:'+target],check=True,capture_output=True)
     record={'state':'publication_submission_uncertain','job_id':job_id,'created':time.time()}
