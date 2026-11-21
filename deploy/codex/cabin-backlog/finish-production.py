@@ -64,7 +64,7 @@ def finish(group,folder):
     config=read(ROOT/'production-configs'/(group+'.json'))
     started=time.monotonic()
     deadline=started+10800
-    rejected=set((old or {}).get('rejected_requests',[])) if (old or {}).get('motion_policy_version')==VERSION else set()
+    rejected=set((old or {}).get('rejected_requests',[]))
     def save(stage,**details):
         p=folder/'delivery.tmp';p.write_text(json.dumps(dict(stage=stage,updated=time.time(),motion_policy_version=VERSION,
             rejected_requests=sorted(rejected),**details),ensure_ascii=False,indent=2));p.replace(receipt)
@@ -82,7 +82,11 @@ def finish(group,folder):
             notify_hold(folder,state['stage']);return
         if state.get('stage')!='preview_ready_for_final_checks':time.sleep(10);continue
         rid=state['request_id']
-        if rid in rejected:time.sleep(10);continue
+        if rid in rejected:
+            previous=read(ROOT/'assets'/rid/'pipeline.json') or {}
+            save('deferred_after_preview_rejection',request_id=rid,
+                 defects=previous.get('defects',['This exact version already failed final review']))
+            return
         assets=ROOT/'assets'/rid;prefix='/tmp/'+rid
         backlog.stage_geometry(rid,backlog.geometry(rid))
         save('final_prescreen',request_id=rid)
@@ -107,7 +111,7 @@ def finish(group,folder):
             visual=json.loads(run(['/usr/bin/python3',str(ROOT/'cabin-backlog'/'final-preview-review.py'),rid],timeout=300).stdout)
             if visual['verdict']!='READY_FOR_OWNER_PREVIEW':defects+=visual['defects'] or ['Visual prescreen rejected']
         if defects:
-            pipeline=read(assets/'pipeline.json');pipeline.update(stage='rejected_preview',defects=defects,updated=time.time())
+            pipeline=read(assets/'pipeline.json');pipeline.update(stage='rejected_preview',defects=defects,updated=time.time(),motion_policy_version=VERSION)
             (assets/'pipeline.json').write_text(json.dumps(pipeline,ensure_ascii=False,indent=2))
             rejected.add(rid);save('retrying_after_preview_rejection',request_id=rid,defects=defects)
             save('deferred_after_preview_rejection',request_id=rid,defects=defects)

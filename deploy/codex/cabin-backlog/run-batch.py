@@ -9,7 +9,8 @@ sys.path.insert(0,str(Path(__file__).resolve().parent.parent))
 import cabin_backlog_registry as registry
 ROOT=Path('/opt/relax-codex');BASE=ROOT/'cabin-backlog'
 DONE={'sent_for_owner_approval','already_in_publication_queue'}
-RETRY={'deferred_after_video_rejection','deferred_after_preview_rejection'}
+RETRY={'deferred_after_video_rejection','deferred_after_preview_rejection',
+       'preparation_failed_no_submission','recover_existing_video','recover_existing_image'}
 OUTAGE={'model_unavailable_no_retry','provider_unavailable_no_image_purchase'}
 
 def read(path):return json.loads(path.read_text()) if path.exists() else {}

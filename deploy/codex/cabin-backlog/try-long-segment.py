@@ -34,7 +34,7 @@ def main(request_id):
             current=json.loads((ROOT/'assets'/cached['request_id']/'pipeline.json').read_text())
             if current['stage']!='held_for_motion_and_audio_review':
                 return dict(state='trim_rejected_after_final_review',pipeline=current)
-        if cached.get('motion_policy_version')==VERSION or cached.get('state')=='preview_ready':return cached
+        if not cached.get('recheck_requested'):return cached
     def save(**data):
         data['motion_policy_version']=VERSION
         report.write_text(json.dumps(data,ensure_ascii=False,indent=2));return data

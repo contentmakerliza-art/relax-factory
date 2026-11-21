@@ -98,6 +98,9 @@ def work(config, folder):
         tmp.replace(folder / 'state.json')
     def salvage(request_id):
         save('looking_for_long_clean_segment', request_id=request_id)
+        cached = read(ROOT / 'assets' / request_id / 'long-segment.json')
+        if cached and not cached.get('recheck_requested') and cached.get('state') != 'preview_ready':
+            return False
         with media_slot():
             result = json.loads(run(['/usr/bin/python3', str(ROOT / 'cabin-backlog' / 'try-long-segment.py'),
                                  request_id], timeout=900).stdout)
@@ -166,9 +169,21 @@ def work(config, folder):
             generation = read(ledger)
             pipeline = ROOT / 'assets' / request_id / 'pipeline.json'
             prior = read(pipeline)
-            if prior and prior.get('stage') in ('rejected_motion','rejected_preview') and prior.get('motion_policy_version')!=VERSION:
+            # A code/policy version change must never erase a durable rejection.
+            # Reconsider this exact media only on an explicit, one-use request.
+            if prior and prior.get('stage') in ('rejected','rejected_motion','rejected_preview') and prior.get('recheck_requested') is True:
                 history=pipeline.parent/'qa-history';history.mkdir(exist_ok=True)
                 (history/('pipeline-before-owner-policy-'+str(time.time_ns())+'.json')).write_text(json.dumps(prior,ensure_ascii=False,indent=2))
+                receipt_path=folder/'delivery.json'
+                receipt=read(receipt_path)
+                if receipt and request_id in receipt.get('rejected_requests',[]):
+                    (history/('delivery-before-explicit-recheck-'+str(time.time_ns())+'.json')).write_text(json.dumps(receipt,ensure_ascii=False,indent=2))
+                    receipt['rejected_requests'].remove(request_id)
+                    receipt_path.write_text(json.dumps(receipt,ensure_ascii=False,indent=2))
+                for name in ('visual-qc.json','final-preview-qc.json','long-segment.json'):
+                    cached=pipeline.parent/name
+                    if cached.exists():cached.rename(history/(str(time.time_ns())+'-'+name))
+                prior.pop('recheck_requested',None)
                 prior.update(stage='needs_recheck_under_owner_policy',updated=time.time())
                 pipeline.write_text(json.dumps(prior,ensure_ascii=False,indent=2))
             if generation and generation.get('async_submission') and generation['state'] in ('submitted','generated_needs_download'):
