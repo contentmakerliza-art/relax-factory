@@ -2,6 +2,9 @@ import json,tempfile,unittest
 from pathlib import Path
 import cabin_corrections as c
 class CorrectionTests(unittest.TestCase):
+ def test_real_blurred_trail_report_gets_geometry_fix(self):
+  p=c.plan('Base',[{'request_id':'old','defects':['На спинке кресла виден размытый серо-голубой след, который тянется вниз к ковру.']}],'video')
+  self.assertEqual(p['categories'],['geometry']);self.assertFalse(p['requires_review'])
  def test_long_base_and_multiple_defects_fit_actual_runway_limit(self):
   defects=['Нет заметного снегопада','Снег внутри комнаты','Кот шевелит головой','Деформация кладки','Камера движется','Яркое отражение в топке']
   p=c.plan('Original detailed scene. '*40,[{'request_id':'old','defects':defects}],'video')

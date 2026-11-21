@@ -4,7 +4,7 @@ import json
 import re
 from pathlib import Path
 
-VERSION = '2026-11-21-defect-feedback-v1'
+VERSION = '2026-11-21-defect-feedback-v2'
 REJECTED = {'rejected', 'rejected_motion', 'rejected_preview'}
 
 
@@ -46,7 +46,7 @@ def classify(text):
         kinds.add('cat_motion')
     if re.search(r'камер|наезд|зум|camera|zoom', t):
         kinds.add('camera')
-    if re.search(r'деформа|двоени|контур|геометр|мебел|кладк|morph|geometry|ghost|furniture', t):
+    if re.search(r'деформа|двоени|контур|геометр|мебел|кладк|размыт.{0,70}след|blurred streak|morph|geometry|ghost|furniture', t):
         kinds.add('geometry')
     if re.search(r'отраж|зеркал|reflection|mirror', t):
         kinds.add('reflections')
@@ -129,6 +129,13 @@ def prepare(request_path, proposed, evidence, kind, audit_folder):
     if audit.exists():
         saved = read(audit)
         if saved.get('requires_review'):
+            if saved.get('version') != VERSION and not plan(proposed['prompt'], evidence, kind)['requires_review']:
+                history=audit_folder/'history';history.mkdir(exist_ok=True)
+                # Only an unsent held request reaches prepare(); generation ledgers
+                # are checked by the caller before invoking this function.
+                archive=history/(audit.name+'.'+saved.get('version','unversioned'))
+                audit.rename(archive)
+                return prepare(request_path,proposed,evidence,kind,audit_folder)
             return saved
         actual = read(request_path)
         if actual != saved['request']:
