@@ -10,8 +10,29 @@ flock -n 9 || exit 0
 
 git fetch -q origin main
 [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] && exit 0
+runtime_changes=false
+changed_paths=$(git diff --name-only HEAD..origin/main)
+while IFS= read -r path; do
+    case "$path" in
+        docs/*|deploy/autoupdate.sh|"") ;;
+        *) runtime_changes=true ;;
+    esac
+done <<< "$changed_paths"
+if [ "$runtime_changes" = false ]; then
+    git merge -q --ff-only origin/main
+    git rev-parse --short HEAD > "$DATA/version"
+    echo "$(date -Is) documentation updated; container preserved"
+    exit 0
+fi
 [ -f "$DATA/busy" ] && exit 0
 [ -f "$DATA/uploading" ] && exit 0  # Upload-Post is downloading a video by its link
+# Server-side preview work happens outside the web app's busy marker.
+# Hold its media lease throughout a real container update.
+preview_lease=/opt/relax-codex/cabin-backlog/media-check.lock
+if [ -f "$preview_lease" ]; then
+    exec 8>"$preview_lease"
+    flock -n 8 || exit 0
+fi
 
 echo "$(date -Is) updating $(git rev-parse --short HEAD) -> $(git rev-parse --short origin/main)"
 git merge -q --ff-only origin/main

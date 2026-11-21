@@ -51,7 +51,8 @@ def main(group):
         except Exception as error:
             receipt=folder/'delivery.json'
             value=read(receipt) or {}
-            value.update(stage='finisher_failed_no_retry',error=type(error).__name__,updated=time.time())
+            value.update(stage='finisher_failed_no_retry',error=type(error).__name__,updated=time.time(),
+                         error_detail=(getattr(error,'stderr','') or str(error))[-4500:])
             receipt.write_text(json.dumps(value,ensure_ascii=False,indent=2))
             notify_hold(folder,'finisher_failed_no_retry')
             raise
@@ -102,6 +103,7 @@ def finish(group,folder):
         motion=json.loads(run(['docker','exec','relax-factory','python','/tmp/head-motion.py',rid,
                               '--filename','preview.mp4'],timeout=180).stdout)
         (assets/'preview-head-motion.json').write_text(json.dumps(motion,indent=2))
+        run(['docker','cp','relax-factory:'+prefix+'/preview-motion-traces.json',str(assets/'preview-motion-traces.json')])
         moving=moving_regions(motion)
         defects=[]
         if not media['technical_screen_passed']:

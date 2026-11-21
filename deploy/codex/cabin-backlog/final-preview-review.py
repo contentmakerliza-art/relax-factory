@@ -26,8 +26,8 @@ def main(rid,recheck=False):
         if not recheck and cached.get('preview_sha256')==preview_sha and cached.get('review_version')==REVIEW_VERSION:return cached
         history=root/'qa-history';history.mkdir(exist_ok=True)
         shutil.copy2(result,history/f'final-preview-before-native-snow-{time.time_ns()}.json')
-    prefix='/tmp/'+rid
-    # Factory updates clear /tmp; the durable preview is the source of truth.
+    prefix='/data/sources/cabin-qa/'+rid
+    # The mounted sources cache survives container recreation between filters.
     run(['docker','exec','relax-factory','mkdir','-p',prefix])
     run(['docker','cp',str(root/'preview.mp4'),'relax-factory:'+prefix+'/preview.mp4'])
     crop=backlog.geometry(rid)['detail_crop']
@@ -47,7 +47,8 @@ def main(rid,recheck=False):
     if numeric.exists():
         from motion_policy import moving_regions
         if moving_regions(json.loads(numeric.read_text())):
-            traces=json.loads(run(['docker','exec','relax-factory','cat',prefix+'/preview-motion-traces.json']).stdout)
+            saved_traces=root/'preview-motion-traces.json'
+            traces=json.loads(saved_traces.read_text()) if saved_traces.exists() else json.loads(run(['docker','exec','relax-factory','cat','/tmp/'+rid+'/preview-motion-traces.json']).stdout)
             frames={0,719};rate=traces['sample_rate']
             for region in ['head','paws','wall']:
                 values=traces['positions'][region]
@@ -61,7 +62,7 @@ def main(rid,recheck=False):
             select='+'.join('eq(n\\,'+str(n)+')' for n in frames)
             filters['preview-motion']=f'select={select},scale=1280:720,crop={w}:{h}:{x}:{y},scale={w*3}:{h*3}:flags=neighbor,tile=6x4'
     for name,f in filters.items():
-        run(['docker','exec','relax-factory','ffmpeg','-nostdin','-v','error','-y','-threads','1',
+        run(['docker','exec','relax-factory','ffmpeg','-nostdin','-v','error','-y','-threads','1','-filter_threads','1',
              '-i',prefix+'/preview.mp4','-vf',f,'-frames:v','1','-threads','1',prefix+'/'+name+'.jpg'])
         run(['docker','cp','relax-factory:'+prefix+'/'+name+'.jpg',str(root/(name+'.jpg'))])
     user=pwd.getpwnam('relax-codex');w=Path('/var/lib/relax-codex/workspace')/(rid+'-final')

@@ -14,11 +14,16 @@ def feature(a):
 
 
 def locate(template,patch):
-    scores=np.empty((7,7))
-    for dy in range(7):
-        for dx in range(7):
-            other=feature(patch[dy:dy+template.shape[0],dx:dx+template.shape[1]])
-            scores[dy,dx]=np.mean((other-template)**2)
+    # Same mean-centered MSE over all 49 offsets, without 49 Python loops
+    # and repeated patch allocation. Sliding windows are views, not copies.
+    a=patch.astype(np.float64);h,w=template.shape;n=h*w
+    def sums(v):
+        integral=np.pad(v.cumsum(0).cumsum(1),((1,0),(1,0)))
+        return integral[h:,w:]-integral[:-h,w:]-integral[h:,:-w]+integral[:-h,:-w]
+    mean=sums(a)/n
+    windows=np.lib.stride_tricks.sliding_window_view(a,(h,w))
+    scores=(sums(a*a)/n-mean*mean-2*np.einsum('ijxy,xy->ij',windows,template)/n
+            +np.mean(template.astype(float)**2)+2*mean*float(template.mean()))
     iy,ix=np.unravel_index(np.argmin(scores),scores.shape)
     def sub(v,i):
         if not 0<i<len(v)-1:return float(i)
