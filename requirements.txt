@@ -3,4 +3,5 @@ uvicorn>=0.29
 python-multipart>=0.0.9
 gdown>=6,<7
 numpy>=1.26
+Pillow==11.3.0
 faster-whisper>=1.0,<2
