@@ -1,0 +1,13 @@
+[Unit]
+Description=Execute persisted Mountain snow corrections and verify Telegram delivery
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/relax-codex
+ExecStart=/usr/bin/python3 /opt/relax-codex/mountain_corrections.py
+MemoryMax=256M
+CPUQuota=35%
+TimeoutStartSec=7200
+

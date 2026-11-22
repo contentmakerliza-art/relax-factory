@@ -1,0 +1,11 @@
+[Unit]
+Description=Pick up Mountain owner corrections without idle AI requests
+
+[Timer]
+OnBootSec=45
+OnUnitInactiveSec=60
+Persistent=true
+Unit=relax-mountain-corrections.service
+
+[Install]
+WantedBy=timers.target
