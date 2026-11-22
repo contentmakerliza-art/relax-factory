@@ -1,0 +1,52 @@
+{
+  "version": "2026-11-22.1",
+  "channel": "Quiet Pines Cabin",
+  "scope": "future_new_images_only",
+  "mood": "cozy_christmas_calm_palette",
+  "rotation": [
+    {
+      "order": 1,
+      "id": "scandinavian",
+      "name": "Светлый скандинавский дом",
+      "visual_brief": "Светлое дерево, простые линии, молочный и хвойный текстиль; ёлка, бумажные звёзды.",
+      "status": "planned"
+    },
+    {
+      "order": 2,
+      "id": "english-cottage",
+      "name": "Английский каменный коттедж",
+      "visual_brief": "Камень и светлая штукатурка, низкие балки, винтажные кресла, книги; венок, гирлянда, спокойная клетка.",
+      "status": "planned"
+    },
+    {
+      "order": 3,
+      "id": "alpine-chalet",
+      "name": "Альпийское шале",
+      "visual_brief": "Выразительные деревянные балки, высокая крыша, альпийская мебель; ель, матовые игрушки, лён и бордовые акценты.",
+      "status": "planned"
+    },
+    {
+      "order": 4,
+      "id": "french-country",
+      "name": "Французский деревенский дом",
+      "visual_brief": "Светлый камень или штукатурка, состаренное дерево, лён; хвоя, крафтовые подарки, матовое золото.",
+      "status": "planned"
+    },
+    {
+      "order": 5,
+      "id": "canadian-log",
+      "name": "Канадский сруб",
+      "visual_brief": "Круглые брёвна, массивный каменный камин, добротная мебель; пышная хвоя, ёлка, шерстяной текстиль.",
+      "status": "planned"
+    },
+    {
+      "order": 6,
+      "id": "american-farmhouse",
+      "name": "Американский загородный дом",
+      "visual_brief": "Крашеная деревянная отделка, светлая каминная кладка, семейная гостиная; ёлка, гирлянды, праздничный текстиль.",
+      "status": "planned"
+    }
+  ],
+  "preserve_approved": true,
+  "new_generations_started": false
+}
