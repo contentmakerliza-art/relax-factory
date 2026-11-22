@@ -1,0 +1,13 @@
+[Unit]
+Description=Resume the requested Mountain View previews through December 22
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/relax-codex
+ExecStart=/usr/bin/python3 /opt/relax-codex/mountain_batch.py
+MemoryMax=250M
+CPUQuota=30%
+Nice=10
+TimeoutStartSec=21600
+

@@ -1,0 +1,80 @@
+import sys
+from pathlib import Path
+sys.path.insert(0,str(Path(__file__).resolve().parent.parent))
+import cabin_backlog_registry as backlog
+"""Measure local template displacement on fixed Cabin 18 geometry, not visual approval."""
+import argparse,json,subprocess
+from pathlib import Path
+import numpy as np
+
+
+def feature(a):
+    a=a.astype(np.float32)
+    return a-a.mean()
+
+
+def locate(template,patch):
+    # Same mean-centered MSE over all 49 offsets, without 49 Python loops
+    # and repeated patch allocation. Sliding windows are views, not copies.
+    a=patch.astype(np.float64);h,w=template.shape;n=h*w
+    def sums(v):
+        integral=np.pad(v.cumsum(0).cumsum(1),((1,0),(1,0)))
+        return integral[h:,w:]-integral[:-h,w:]-integral[h:,:-w]+integral[:-h,:-w]
+    mean=sums(a)/n
+    windows=np.lib.stride_tricks.sliding_window_view(a,(h,w))
+    scores=(sums(a*a)/n-mean*mean-2*np.einsum('ijxy,xy->ij',windows,template)/n
+            +np.mean(template.astype(float)**2)+2*mean*float(template.mean()))
+    iy,ix=np.unravel_index(np.argmin(scores),scores.shape)
+    def sub(v,i):
+        if not 0<i<len(v)-1:return float(i)
+        den=v[i-1]-2*v[i]+v[i+1]
+        return i+float((v[i-1]-v[i+1])/(2*den)) if den>0 else float(i)
+    return sub(scores[iy],ix)-3,sub(scores[:,ix],iy)-3,float(scores[iy,ix])
+
+
+def main(request_id,filename='source.mp4'):
+    if filename not in ('source.mp4','preview.mp4'):raise ValueError('Unsupported media file')
+    path=Path('/tmp')/request_id/filename
+    reference=None
+    if filename=='source.mp4':
+        reference_raw=subprocess.run(['ffmpeg','-nostdin','-v','error','-ss','1','-i',str(path),'-vf','scale=1280:720','-frames:v','1','-pix_fmt','gray','-threads','1','-f','rawvideo','-'],capture_output=True,check=True).stdout
+        if len(reference_raw)!=1280*720:raise ValueError('Reference decode failed')
+        reference=np.frombuffer(reference_raw,np.uint8).reshape(720,1280)
+    proc=subprocess.Popen(['ffmpeg','-nostdin','-v','error','-i',str(path),'-vf','fps=24,scale=1280:720',
+                           '-pix_fmt','gray','-threads','1','-f','rawvideo','-'],stdout=subprocess.PIPE)
+    regions={'head':(805,496,94,70),'paws':(833,552,95,30),'wall':(160,20,100,100)}
+    if request_id.startswith('cabin22-'):
+        regions={'head':(228,568,80,65),'paws':(242,625,65,24),'wall':(370,30,100,100)}
+    if request_id.startswith('cabin08-'):
+        regions={'head':(520,484,85,62),'paws':(562,526,75,28),'wall':(135,15,100,100)}
+    regions['flank']=(900,510,70,45)
+    if request_id.startswith('cabin22-'):regions['flank']=(150,580,70,50)
+    if request_id.startswith('cabin08-'):regions['flank']=(583,490,60,40)
+    regions=backlog.geometry(request_id)['regions']
+    templates={};positions={k:[] for k in regions}
+    while True:
+        raw=bytearray()
+        while len(raw)<1280*720:
+            chunk=proc.stdout.read(1280*720-len(raw))
+            if not chunk:break
+            raw.extend(chunk)
+        if not raw:break
+        if len(raw)!=1280*720:raise ValueError('Incomplete frame')
+        frame=np.frombuffer(raw,np.uint8).reshape(720,1280)
+        for name,(x,y,w,h) in regions.items():
+            if name not in templates:templates[name]=feature((reference if reference is not None else frame)[y:y+h,x:x+w])
+            positions[name].append(locate(templates[name],frame[y-3:y+h+3,x-3:x+w+3]))
+    if proc.wait()!=0:raise ValueError('Decode failed')
+    prefix='preview-' if filename=='preview.mp4' else ''
+    (path.parent/(prefix+'motion-traces.json')).write_text(json.dumps({'sample_rate':24,'reference_seconds':1 if filename=='source.mp4' else 0,'regions':regions,'positions':positions}))
+    report={}
+    for name,items in positions.items():
+        a=np.asarray(items)
+        report[name]={'x_range_pixels':float(np.ptp(a[:,0])),'y_range_pixels':float(np.ptp(a[:,1])),
+                      'max_match_mse':float(a[:,2].max()),'samples':len(items)}
+    (path.parent/(prefix+'head-motion.json')).write_text(json.dumps(report,indent=2));print(json.dumps(report))
+
+
+if __name__=='__main__':
+    p=argparse.ArgumentParser();p.add_argument('request_id');p.add_argument('--filename',default='source.mp4')
+    a=p.parse_args();main(a.request_id,a.filename)

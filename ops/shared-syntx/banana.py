@@ -24,7 +24,7 @@ def collect_result(page, message, job_id, output_dir):
     if not re.fullmatch(r"[0-9a-f]{32}", job_id) or not permitted_page(page.url):
         raise ValueError("Invalid result context")
     with page.expect_download(timeout=60000) as download_info:
-        message.locator('[data-cy="download-file-btn"]').click()
+        message.locator('[data-cy="download-file-btn"]').evaluate('(button)=>button.click()')
     download = download_info.value
     suffix = Path(download.suggested_filename).suffix.lower()
     if suffix not in (".png", ".jpg", ".jpeg", ".webp"):
@@ -32,7 +32,8 @@ def collect_result(page, message, job_id, output_dir):
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
     target = output / (job_id + suffix)
-    download.save_as(str(target))
+    from syntx_download_current import save_download
+    save_download(page,download,target)
     if not 100 < target.stat().st_size <= 25_000_000:
         raise RuntimeError("Unexpected output size")
     from PIL import Image
@@ -65,10 +66,14 @@ def _run_unlocked(job, queue, output_dir, *, cdp="http://127.0.0.1:9222", prepar
         try:
             if len(browser.contexts) != 1:
                 raise RuntimeError("Expected exactly one isolated SYNTX profile")
+            if not browser.contexts[0].pages:
+                fresh=browser.contexts[0].new_page()
+                fresh.goto(BANANA_URL,wait_until='domcontentloaded')
             pages = browser.contexts[0].pages
             if len(pages) != 1 or urlsplit(pages[0].url).netloc != "syntx.ai":
                 raise RuntimeError("Expected one dedicated SYNTX tab")
             page = pages[0]
+            page.set_viewport_size({'width':1920,'height':1080})
 
             def guard(route):
                 request = route.request
@@ -159,4 +164,4 @@ def _run_unlocked(job, queue, output_dir, *, cdp="http://127.0.0.1:9222", prepar
             raise RuntimeError("SYNTX task requires inspection") from None
         finally:
             # Closing the CDP client disconnects it; the persistent Chromium stays.
-            browser.close()
+            pass  # sync_playwright disconnects; keep the shared persistent browser open

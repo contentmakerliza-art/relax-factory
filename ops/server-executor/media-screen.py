@@ -36,6 +36,7 @@ def main(request_id):
     a=audio('audio.wav');b=audio('preview.mp4');n=min(len(a),len(b))
     correlation=float(np.corrcoef(a[:n],b[:n])[0,1])
     report={'frames':count,'max_adjacent_frame_difference':max(values),
+            'max_difference_frame':int(np.argmax(values))+1,
             'mean_adjacent_frame_difference':float(np.mean(values)),
             'audio_correlation':correlation,'audio_peak':float(np.abs(b).max()),
             'visual_review_required':True,'listening_performed':False}

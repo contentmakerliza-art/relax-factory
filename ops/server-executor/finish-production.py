@@ -136,6 +136,12 @@ def finish(group,folder):
             title=('Botanical Winter Cabin' if day=='08' else 'Cozy Christmas Library')+' & Crackling Fireplace | Sleeping Cat | 3 Hours',
             description='Relax in a warm wooden cabin with a sleeping cat, a crackling fireplace and snowfall outside the closed windows.\n\nThree hours of fireplace ambience for reading, relaxing and winding down. No music or wind in the audio.\n\nThis scene was created with AI and edited for Quiet Pines Cabin.',
             tags='cozy cabin, crackling fireplace, fireplace sounds, sleeping cat, snowy forest, winter ambience, relaxing ambience, quiet pines cabin')
+        from christmas_titles import title_for
+        manifest['title']=title_for(manifest['channel'],manifest['title'])
+        from public_metadata import description_for,tags_for
+        manifest['description']=description_for(manifest['channel'],manifest['title'],manifest.get('description',''))
+        manifest['tags']=', '.join(tags_for(manifest['channel'],manifest['title']))
+        manifest['public_metadata_policy']='2026-11-21-seasonal-keywords-v1'
         manifests=ROOT/'publication-manifests';manifests.mkdir(exist_ok=True)
         target=manifests/(job_id+'.json')
         if target.exists() and read(target)!=manifest:raise ValueError('Existing publication manifest differs')

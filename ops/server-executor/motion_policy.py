@@ -5,8 +5,9 @@ be treated as the same motion as a head, paw or fixed wall moving.
 """
 import math
 
-VERSION='2026-11-20-subtle-breathing-v2'
-LIMITS={'head':1.0,'paws':1.0,'wall':1.0,'flank':2.0}
+VERSION='2026-11-21-visible-motion-v4-triage'
+# Owner permits an additional half-pixel measurement margin; visual QC remains mandatory.
+LIMITS={'head':1.5,'paws':1.5,'wall':1.5,'flank':2.0}
 
 
 def moving_regions(report):

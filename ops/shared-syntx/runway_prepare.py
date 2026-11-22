@@ -30,6 +30,9 @@ def prepare(source, prompt, *, submit=False, request_id=None, model_name='Gen-4 
                         'previous': json.loads(ledger.read_text())}
         with sync_playwright() as pw:
             browser = pw.chromium.connect_over_cdp('http://127.0.0.1:9222', timeout=15000, artifacts_dir='/downloads')
+            if len(browser.contexts)==1 and not browser.contexts[0].pages:
+                fresh=browser.contexts[0].new_page()
+                fresh.goto('https://syntx.ai/ru/video/runway',wait_until='domcontentloaded')
             if len(browser.contexts) != 1 or len(browser.contexts[0].pages) != 1:
                 raise RuntimeError('Expected exactly one existing SYNTX tab')
             page = browser.contexts[0].pages[0]
@@ -110,7 +113,8 @@ def prepare(source, prompt, *, submit=False, request_id=None, model_name='Gen-4 
                     with page.expect_download(timeout=60000) as download:
                         message.locator('[data-cy="download-file-btn"]').click()
                     output = Path('/downloads') / (request_id + '.mp4')
-                    download.value.save_as(str(output))
+                    from syntx_download_current import save_download
+                    save_download(page,download.value,output,maximum=100000000)
                     if output.stat().st_size < 10000:
                         raise RuntimeError('Downloaded video is incomplete')
                     record.update(state='downloaded_needs_qc', file=str(output))

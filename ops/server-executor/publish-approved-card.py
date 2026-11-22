@@ -11,6 +11,11 @@ import runpy
 def main(job_id):
     if not re.fullmatch(r'\d{8}-\d{6}-[a-f0-9]{4}',job_id):raise ValueError('Invalid source')
     manifest=json.loads((Path('/tmp')/('codex-manifest-'+job_id+'.json')).read_text())
+    from christmas_titles import title_for
+    manifest['title']=title_for(manifest['channel'],manifest['title'])
+    from public_metadata import description_for,tags_for
+    manifest['description']=description_for(manifest['channel'],manifest['title'],manifest.get('description',''))
+    manifest['tags']=', '.join(tags_for(manifest['channel'],manifest['title']))
     profiles={'Quiet_Pines':'Quiet Pines Cabin','Little_Paris_Jazz_Cafe':'Little Paris Jazz Cafe'}
     if (manifest['job_id']!=job_id or profiles.get(manifest['profile'])!=manifest['channel']
             or not manifest['recipe_verified']):
@@ -38,6 +43,9 @@ def main(job_id):
                        ('file',Path('/tmp/cabin-full-fireplace-9.wav'),'audio/wav'))
         if audio['sha256']!=manifest['audio_sha256'] or audio['seconds']<100:
             raise ValueError('Complete approved audio is missing')
+        if manifest.get('publication_loop_mode')=='repeat':
+            from cabin_loop_recipe import install_verified_master
+            install_verified_master(folder,Path('/tmp')/('codex-loop-master-'+job_id+'.mp4'),manifest)
     else:
         if len(manifest.get('full_tracks',[]))<6:raise ValueError('Full musical album required')
         for track in manifest['full_tracks']:
@@ -58,6 +66,9 @@ def main(job_id):
                             loop_crossfade=.75 if manifest['profile']=='Quiet_Pines' else 0,
                             width=1920,height=1080,fps=24,find_loop_point=False,
                             stabilize=False,smooth=False,speed=1,stab_mask='')
+    if manifest.get('publication_loop_mode')=='repeat':
+        if manifest['profile']!='Quiet_Pines':raise ValueError('Cyclic recipe is scoped to Cabin')
+        meta['settings'].update(loop_mode='repeat',loop_crossfade=0)
     if manifest['profile']=='Little_Paris_Jazz_Cafe':
         meta['settings'].update(loudness=-19,track_crossfade=3,shuffle_tracks=False,logo='')
         meta['tracks']=len(manifest['full_tracks'])

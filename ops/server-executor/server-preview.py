@@ -17,6 +17,10 @@ def run(*args):
 def main(request_id):
     if not re.fullmatch('[a-z0-9-]{16,80}', request_id):
         raise ValueError('Invalid request ID')
+    import cabin_backlog_registry as backlog
+    if backlog.attempt(request_id):
+        import runpy
+        return runpy.run_path('/opt/relax-codex/build-cabin-loop.py')['main'](request_id)
     folder = Path('/opt/relax-codex/assets') / request_id
     folder.mkdir(exist_ok=True)
     if (folder/'recipe-and-checks.json').exists() and (folder/'preview.mp4').is_file():

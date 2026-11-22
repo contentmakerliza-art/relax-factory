@@ -65,6 +65,10 @@ def main():
         if not comments or not (comments[-1].get('text') or comments[-1].get('transcript')):
             with db:db.execute("UPDATE tasks SET state='needs_transcription' WHERE id=?",(task_id,))
             continue
+        window_path=ROOT/'window_snow_auto.py'
+        if window_path.exists():
+            window=module('window_snow_dispatch',window_path)
+            if window.dispatch_decision(task_id,current,db):return
         portable_path=ROOT/'portable-corrections.py'
         if portable_path.exists():
             portable=module('portable_corrections',portable_path)
