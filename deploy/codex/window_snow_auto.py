@@ -106,6 +106,17 @@ def codex_layout(prepared_dir,job,attempt,feedback,cache):
  cached=cache/'plan.json';cache.mkdir(parents=True,exist_ok=True)
  if cached.exists():return validate_plan(read(cached))
  output=work/'plan.json'
+ started=cache/'model-started.json'
+ if started.exists():
+  unit='relax-auto-mask-'+job['id'][-12:]+f'-{attempt}.service'
+  deadline=time.monotonic()+250
+  while not output.exists() and time.monotonic()<deadline:
+   active=subprocess.run(['systemctl','is-active','--quiet',unit],capture_output=True).returncode==0
+   if not active:break
+   time.sleep(3)
+  if output.exists():
+   atomic(cached,read(output));return validate_plan(read(cached))
+  raise RuntimeError('Prior AI layout outcome uncertain; automatic duplicate is blocked')
  args=['systemd-run','--unit=relax-auto-mask-'+job['id'][-12:]+f'-{attempt}','--collect','--wait','--pipe','-p','User=relax-codex','-p','WorkingDirectory='+str(work),'-p','MemoryMax=512M','-p','CPUQuota=25%','-p','RuntimeMaxSec=240',
  '--setenv=HOME=/var/lib/relax-codex','--setenv=CODEX_HOME=/var/lib/relax-codex/.codex',
  '/opt/relax-codex/release-0.171.0/bin/codex','exec','--ephemeral','--skip-git-repo-check','--sandbox','read-only',

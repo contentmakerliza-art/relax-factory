@@ -1,4 +1,5 @@
-import copy,json,tempfile,unittest,hashlib,sqlite3
+import copy,json,tempfile,unittest,hashlib,sqlite3,os
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
 import window_snow_contract as c
@@ -64,6 +65,21 @@ class ContractTests(unittest.TestCase):
     self.assertTrue(worker.dispatch_decision(identity,row,db));enqueue.assert_called_once()
     self.assertEqual(db.execute('SELECT state FROM tasks').fetchone()[0],'window_queued')
     with self.assertRaises(ValueError):worker.dispatch_decision('a'*64,row,db)
+ def test_fresh_layout_records_start_before_model_and_reuses_result(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   root=Path(tmp);prepared=root/'prepared';prepared.mkdir();(root/'workspace').mkdir()
+   for i in range(4):(prepared/f'frame{i}.png').write_bytes(b'frame')
+   cache=root/'cache';job={'id':'cabin20-auto-0123456789abcdef'}
+   real_path=Path
+   def mapped(value):return root/'workspace' if str(value)=='/var/lib/relax-codex/workspace' else real_path(value)
+   calls=[]
+   def execute(args,**kwargs):
+    self.assertTrue((cache/'model-started.json').exists());calls.append(args)
+    real_path(args[args.index('-o')+1]).write_text(json.dumps(plan()))
+   with patch.object(worker,'Path',side_effect=mapped),patch.object(worker.pwd,'getpwnam',return_value=SimpleNamespace(pw_uid=os.getuid(),pw_gid=os.getgid())),patch.object(worker.os,'chown'),patch.object(worker,'run',side_effect=execute):
+    first=worker.codex_layout(prepared,job,1,'',cache)
+    second=worker.codex_layout(prepared,job,1,'',cache)
+   self.assertEqual(first,second);self.assertEqual(len(calls),1)
  def test_enqueue_is_durable_and_deduplicated(self):
   with tempfile.TemporaryDirectory() as tmp:
    root=Path(tmp);parent='cabin05-fixed-v15-20261121';p=root/'assets'/parent;p.mkdir(parents=True)
