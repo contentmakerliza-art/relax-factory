@@ -8,8 +8,10 @@ from studio_tools import QUEUE,ASSETS
 
 JOB='c1daaaf99ae898714ad1eb7e99b90f53'
 CHAT='https://syntx.ai/ru/image/banana/b3739762-2f2e-467e-a9aa-5abaa8e32676'
-if len(sys.argv)==3:JOB,CHAT=sys.argv[1:]
-if not re.fullmatch('[0-9a-f]{32}',JOB) or not re.fullmatch('https://syntx.ai/ru/image/banana/[0-9a-f-]{36}',CHAT):
+automatic=len(sys.argv)==3 and sys.argv[1]=='--auto'
+if automatic:JOB,CHAT=sys.argv[2],''
+elif len(sys.argv)==3:JOB,CHAT=sys.argv[1:]
+if not re.fullmatch('[0-9a-f]{32}',JOB) or (not automatic and not re.fullmatch('https://syntx.ai/ru/image/banana/[0-9a-f-]{36}',CHAT)):
     raise ValueError('Unexpected inspected result identity')
 job=QUEUE.get(JOB)
 if 'Mountain View Cafe' not in job['payload']['prompt']:raise ValueError('Different project task preserved')
@@ -23,6 +25,16 @@ with browser_lease():
         page.set_viewport_size({'width':1920,'height':1080})
         original=page.url if page.url.startswith('https://syntx.ai/') else 'https://syntx.ai/ru/image/banana'
         try:
+            if automatic:
+                page.goto('https://syntx.ai/ru/image/banana',wait_until='domcontentloaded')
+                page.locator('.session-item__content').first.wait_for(state='visible',timeout=45000)
+                titles=page.locator('.session-item__content').all_text_contents()[:8]
+                for title in titles:
+                    button=page.get_by_role('button',name=title.strip(),exact=True)
+                    if button.count()!=1:continue
+                    button.click();page.locator('img.bot-image-item__image').first.wait_for(state='visible',timeout=60000)
+                    if job['payload']['prompt'] in page.locator('body').inner_text():CHAT=page.url;break
+                if not CHAT:raise ValueError('Exact paid request not found in recent history; never regenerate blindly')
             page.goto(CHAT,wait_until='domcontentloaded')
             page.locator('img.bot-image-item__image').wait_for(state='visible',timeout=60000)
             if job['payload']['prompt'] not in page.locator('body').inner_text():raise ValueError('Prompt identity mismatch')

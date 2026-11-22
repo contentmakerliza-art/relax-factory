@@ -11,7 +11,7 @@ ROOT=Path('/opt/relax-codex');BATCH=ROOT/'mountain-backlog-20261122'
 DOWNLOADS=Path('/opt/marketplace-analytics/studio-downloads')
 STATE=Path('/opt/marketplace-analytics/studio-state')
 DATA=Path('/var/lib/relax-factory')
-VERSION='2026-11-22-mountain-native-batch-v1'
+VERSION='2026-11-22-mountain-window-snow-v2'
 
 
 def read(p,default=None):return json.loads(p.read_text()) if p.exists() else default
@@ -63,6 +63,28 @@ def image_job(job_id):
     return dict(row)
 
 
+def recover_image(job_id,folder):
+    row=image_job(job_id)
+    retry=folder/'image-preflight-retry.json'
+    if retry.exists():row=image_job(read(retry)['id'])
+    elif row['state']=='failed' and row.get('error') in ('SYNTX preparation failed; inspect browser','Browser connection unavailable','Worker stopped before submission'):
+        # These explicit states precede the chargeable click; retry the preparation once.
+        payload=json.loads(row['payload'])
+        if 'Mountain View Cafe' not in payload['prompt']:return row
+        code="import json,sys;from jobs import Queue;a=json.load(sys.stdin);print(json.dumps(Queue('/state/jobs.sqlite').create(a['request_id'],a['prompt'],'16:9')))"
+        result=json.loads(run(['docker','exec','-i','-e','PYTHONPATH=/app','marketplace-syntx-studio','python','-c',code],
+            input=json.dumps({'request_id':'mountain-preflight-retry-'+job_id,'prompt':payload['prompt']})))
+        save(retry,{'id':result['id'],'previous':job_id,'reason':'explicit_failure_before_submission'});row=image_job(result['id'])
+    job_id=row['id']
+    if row['state']!='uncertain':return row
+    marker=folder/'image-recovery.json';record=read(marker,{'attempts':0})
+    if record['attempts']>=3:return row
+    save(marker,dict(attempts=record['attempts']+1,job_id=job_id,started=time.time()))
+    run(['docker','exec','-e','PYTHONPATH=/app','marketplace-syntx-studio','python',
+         '/downloads/recover_mountain_image30.py','--auto',job_id],timeout=600)
+    return image_job(job_id)
+
+
 def recover_video(rid,row):
     """Fetch only the exact already-generated CDN result recorded by the UI."""
     url=urllib.parse.urlsplit(row.get('video_url',''))
@@ -86,6 +108,23 @@ def replace_source(cfg,folder,defects):
     save(folder/'state.json',{'stage':'replacing_source','reason':'visual_rejection','defects':defects,'image_job_id':result['id'],'updated':time.time()})
 
 
+def window_mask(folder,container):
+    from window_snow_contract import schema,validate_plan
+    docker('python','/tmp/mountain_batch_media.py','window-frames',container)
+    for i in range(4):cp('relax-factory:'+container+f'/frame{i}.png',folder/f'frame{i}.png')
+    fields={k:v for k,v in schema()['properties'].items() if k not in ('verdict','notes')}
+    result=judge(folder,'window-layout',[folder/f'frame{i}.png' for i in range(4)],
+        'Annotate safe exterior window glass in these four1280x720 frames of ONE Mountain View cafe animation. Coordinates in native1280x720 pixels. Each individual glass pane needs its own polygon inside its inner edges, excluding all mullions, frame, sill and wall. Foreground polygons cover the FULL silhouettes of every chair back, posts, rails, furniture, plants or other indoor object crossing glass; cover holes in chair backs too, taking the union over frames. Glass is the intersection safe over all four frames. Snow must never cover furniture or frames. Inset_fullhd_px=8. Return3..6 textured rigid interior regions [x,y,width,height], x>=48,y>=27,x+w<=1232,y+h<=693,width24..200,height24..160, away from fire, sky, reflections and snow. No fireplace, flame or interior editing. PASS only if boundaries can be located safely, otherwise UNCERTAIN. The rendered mask is separately checked before any preview delivery.',fields)
+    if result['verdict']!='PASS':raise ValueError('Window geometry uncertain; preserve source, no provider retry')
+    plan={k:result[k] for k in fields};plan.update(verdict='READY',notes=result['limitations']);validate_plan(plan)
+    save(folder/'window-plan.json',plan);cp(folder/'window-plan.json','relax-factory:'+container+'/window-plan.json')
+    docker('python','/tmp/mountain_batch_media.py','window-mask',container)
+    cp('relax-factory:'+container+'/mask-overlay.png',folder/'mask-overlay.png')
+    snow=DATA/'sources/executor-library/assets/Исходники/Little Paris Jazz Cafe/Неделя 3 — 29 ноября–5 декабря/Снег Little Paris — мелкие хлопья — альфа 30 секунд.mkv'
+    if not snow.is_file():raise ValueError('Existing approved Snow layer unavailable')
+    cp(snow,'relax-factory:'+container+'/external-snow.mkv')
+
+
 def process(cfg):
     folder=BATCH/cfg['request_id'];folder.mkdir(exist_ok=True)
     status=folder/'state.json';previous=read(status,{})
@@ -99,14 +138,13 @@ def process(cfg):
         if previous.get('reason') in ('source_image_qc','three_native_videos_exhausted_new_image_required'):
             replace_source(cfg,folder,previous.get('defects',[]))
             return
-        if not (cfg.get('image_job_id') and previous.get('reason') in ('uncertain','failed')
-                and image_job(cfg['image_job_id'])['state']=='completed'):
-            return
+        if not (cfg.get('image_job_id') and previous.get('reason') in ('uncertain','failed')):return
+        if recover_image(cfg['image_job_id'],folder)['state']!='completed':return
     def state(stage,**kw):save(status,dict(stage=stage,updated=time.time(),episode=cfg['episode'],date=cfg['date'],**kw))
     source=folder/'source.jpg'
     if not source.exists():
         if cfg.get('image_job_id'):
-            job=image_job(cfg['image_job_id'])
+            job=recover_image(cfg['image_job_id'],folder)
             if job['state']!='completed':
                 state('waiting_image' if job['state'] in ('queued','preparing','submitted') else 'held',reason=job['state']);return
             result=json.loads(job['result']);name=Path(result['file']).name
@@ -146,7 +184,13 @@ def process(cfg):
         if row['state']!='downloaded_needs_qc':
             state('waiting_runway' if row['state']=='submitted' else 'held',request_id=rid,reason=row['state']);return
         attemptdir=folder/('attempt-'+str(attempt));attemptdir.mkdir(exist_ok=True)
-        src=DOWNLOADS/(rid+'.mp4');cp(src,'relax-factory:'+container+'/raw.mp4')
+        src=DOWNLOADS/(rid+'.mp4');archived=attemptdir/'raw.mp4'
+        if not src.exists() and archived.exists():shutil.copy2(archived,src)
+        if archived.exists():
+            if hashlib.sha256(archived.read_bytes()).digest()!=hashlib.sha256(src.read_bytes()).digest():
+                raise ValueError('Frozen native video changed')
+        else:shutil.copy2(src,archived)
+        cp(src,'relax-factory:'+container+'/raw.mp4')
         try:
             normalization=json.loads(docker('python','/tmp/mountain_batch_media.py','normalize',container,timeout=300))
         except RuntimeError as e:
@@ -158,23 +202,28 @@ def process(cfg):
             docker('python','/tmp/mountain_batch_media.py','source-sheet',container)
             cp('relax-factory:'+container+'/source-contact.png',attemptdir/'stable-source-contact.png')
         state('video_qc',request_id=rid)
-        q=judge(attemptdir,'stable-video-qc',[folder/'source-review.jpg',attemptdir/'stable-source-contact.png'],
-            'Compare the source still and chronological20 frames from the actual10-second Mountain View animation after bounded whole-frame camera correction (5columns). A small constant framing crop versus the source is permitted. Require a locked camera and rigid room/mountains, natural existing fireplace flames, visible moving fine snowfall OUTSIDE every pane only. No indoor snow, moving furniture, invented objects, focus breathing, geometric deformation or strong new reflections. Natural tiny flame shadows and subpixel shimmer allowed. Reject residual noticeable camera zoom, unstable correction or clearly static/absent snowfall; mark UNCERTAIN if sample evidence insufficient. A PASS here only permits testing the final loop; does not approve assembly or audio. Give concrete defects in Russian, no invented history.')
+        q=judge(attemptdir,'stable-video-qc-v2',[folder/'source-review.jpg',attemptdir/'stable-source-contact.png'],
+            'Compare the source still and chronological20 frames of the actual10-second Mountain View animation after bounded camera correction. Small CONSTANT framing crop versus still is allowed. Judge source integrity: fixed camera, rigid room/mountains, natural original flames, no indoor snow, moving furniture, focus breathing, geometric deformation or strong new reflections. Tiny flame shadows and subpixel shimmer allowed. PASS means this physical source is suitable for assembly, NOT finished preview approval. Separately report outdoor_snow=VISIBLE/ABSENT/UNCERTAIN based on falling flakes, not settled snow. ABSENT or UNCERTAIN exterior snowfall ALONE must not reject a sound physical source: the assembler can add the existing Snow layer behind separately checked glass masks. Indoor flakes remain a real source defect. Mark actual object/camera defects REJECT; unclear source integrity UNCERTAIN. Russian defects, no invented history.',
+            {'outdoor_snow':{'type':'string','enum':['VISIBLE','ABSENT','UNCERTAIN']}})
         if q['verdict']!='PASS':feedback=q['defects'];continue
+        snow_needed=q['outdoor_snow']!='VISIBLE'
+        if snow_needed:window_mask(attemptdir,container)
         shutil.copy2(ROOT/'assets/cabin-approved-fireplace-9.wav',folder/'audio.wav')
         cp(folder/'audio.wav','relax-factory:'+container+'/audio.wav')
         for fade in (6,3,0):
             # Different source attempts must never reuse an older render.
-            attemptcontainer=container+'-a'+str(attempt)
+            attemptcontainer=container+'-a'+str(attempt)+('-snow' if snow_needed else '')
             docker('mkdir','-p',attemptcontainer)
             for name in ('source.mp4','audio.wav','config.json'):docker('cp',container+'/'+name,attemptcontainer+'/'+name)
+            if snow_needed:
+                for name in ('mask.png','window-plan.json','external-snow.mkv'):docker('cp',container+'/'+name,attemptcontainer+'/'+name)
             state('assembly_qc',request_id=rid,fade_frames=fade)
             technical=json.loads(docker('python','/tmp/mountain_batch_media.py','build',attemptcontainer,'--fade',str(fade),timeout=600))
             docker('python','/tmp/mountain_batch_media.py','preview-sheet',attemptcontainer,'--fade',str(fade),timeout=180)
             names=[f'preview-{fade}-'+suffix+'.png' for suffix in ('contact','seam','rigid')]
             for name in names:cp('relax-factory:'+attemptcontainer+'/'+name,attemptdir/name)
-            q=judge(attemptdir,'assembly-'+str(fade),[attemptdir/name for name in names],
-                'Inspect the finished30-second Mountain View preview. Image1 chronological20 frames across30s. Image2 twelve consecutive frames centered on the actual cyclic wrap, labeledframe numbers. Image3 three rows of twelve native-scale rigid-region crops around the same seam. Require visible fine exterior snowfall only, fixed frames/furniture/mountains and native natural fire. Reject visible jump, doubled furniture, ghosting or blur at the seam, camera pullback/reset, indoor flakes or visual deformation. Tiny texture shimmer is allowed. Do not infer prior failures. PASS only when these exact assembly samples look sound; UNCERTAIN blocks delivery. Audio is separately measured against the owner-approved fireplace reference, do not claim listening. Defects in Russian.')
+            q=judge(attemptdir,'assembly-'+str(fade)+('-snow' if snow_needed else ''),[attemptdir/name for name in names]+([attemptdir/'mask-overlay.png'] if snow_needed else []),
+                'Inspect the finished30-second Mountain View preview. Image1 chronological20 frames across30s. Image2 twelve consecutive frames centered on the actual cyclic wrap, labeledframe numbers. Image3 three rows of twelve native-scale rigid-region crops around the same seam. Optional image4 is the diagnostic pink window Snow mask, not actual pink content. Require Snow only behind glass, mask avoiding whole furniture silhouettes and all wooden frames. Require VISIBLE fine falling exterior snow, fixed frames/furniture/mountains and original natural fire. Reject visible jump, doubled furniture, ghosting, blur at seam, residual zoom/reset, Snow on frames/chairs or other indoor objects, deformation. Tiny texture shimmer allowed. Do not infer prior failures. PASS only for sound exact assembly samples; UNCERTAIN blocks delivery. Audio measured separately against approved fireplace reference; do not claim listening. Defects in Russian.')
             if q['verdict']!='PASS':continue
             ready=dict(technical,**{'pass':True,'visual_qc':q,'request_id':rid,'sampled_visual_review':True,'owner_approval_required':True})
             save(folder/'ready.json',ready);cp(folder/'ready.json','relax-factory:'+attemptcontainer+'/ready.json')
@@ -194,6 +243,7 @@ def main():
         try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
         except BlockingIOError:return
         cp(ROOT/'mountain_batch_media.py','relax-factory:/tmp/mountain_batch_media.py')
+        cp(ROOT/'window_snow_contract.py','relax-factory:/tmp/window_snow_contract.py')
         for cfg in read(BATCH/'plan.json'):
             try:process(cfg)
             except Exception as e:

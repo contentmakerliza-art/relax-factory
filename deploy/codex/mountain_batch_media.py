@@ -50,13 +50,39 @@ def probe(path):
     return json.loads(run('ffprobe','-v','error','-show_streams','-of','json',str(path)))['streams']
 
 
+def snow_master(folder,native,n,fade):
+    """Snow only behind scene-specific glass. No local fireplace edits."""
+    output=folder/f'master-{fade}.mp4'
+    if output.exists():return output
+    count=n-fade;seconds=count/24
+    alpha=folder/f'snow-cycle-{fade}.mkv'
+    flt=f'[0:v]fps=24,trim=end_frame={n},settb=1/24,setpts=N,format=gray'
+    inputs=['-threads','1','-i',str(folder/'external-snow.mkv')]
+    if fade:
+        inputs+=['-threads','1','-i',str(folder/'external-snow.mkv')]
+        flt+=f',trim=start_frame={fade},setpts=PTS-STARTPTS,fps=24[tail];[1:v]fps=24,trim=end_frame={fade},settb=1/24,setpts=N,format=gray,fps=24[head];[tail][head]xfade=duration={fade/24}:offset={(n-2*fade)/24},format=gray'
+    flt+='[v]'
+    run('ffmpeg','-nostdin','-v','error','-y',*inputs,'-filter_complex_threads','1','-filter_complex',flt,'-map','[v]',
+        '-an','-frames:v',str(count),'-threads','1','-c:v','ffv1','-pix_fmt','gray',str(alpha))
+    graph=('[2:v]scale=1920:1080:flags=neighbor,format=gray[mask];'
+        '[1:v]format=gray[fall];[fall][mask]blend=all_mode=multiply[alpha];'
+        f'color=c=0xf5f8fa:s=1920x1080:r=24:d={seconds}[white];'
+        '[white][alpha]alphamerge[flakes];[0:v][flakes]overlay=shortest=1,format=yuv420p[v]')
+    tmp=output.with_suffix('.partial.mp4')
+    run('ffmpeg','-nostdin','-v','error','-y','-threads','1','-i',str(native),'-threads','1','-i',str(alpha),
+        '-loop','1','-i',str(folder/'mask.png'),'-filter_complex_threads','1','-filter_complex',graph,
+        '-map','[v]','-an','-frames:v',str(count),'-c:v','libx264','-threads','2','-preset','fast','-crf','17',str(tmp))
+    tmp.replace(output);return output
+
+
 def build(folder, fade_frames):
     source=folder/'source.mp4'
     stream=next(s for s in probe(source) if s['codec_type']=='video')
     n=min(240, math.floor(float(stream['duration'])*24+.01))
     if n<192: raise ValueError('Need at least eight native seconds')
     if fade_frames not in (6,3,0): raise ValueError('Unexpected seam option')
-    master=folder/('master-'+str(fade_frames)+'.mp4')
+    masked=(folder/'mask.png').exists()
+    master=folder/(('native-master-' if masked else 'master-')+str(fade_frames)+'.mp4')
     if not master.exists():
         graph=f'[0:v]fps=24,trim=end_frame={n},settb=1/24,setpts=N,setsar=1,format=yuv420p'
         if fade_frames:
@@ -69,6 +95,7 @@ def build(folder, fade_frames):
             '-filter_complex_threads','1','-filter_complex',graph,'-map','[v]',
             '-an','-c:v','libx264','-threads','2','-preset','fast','-crf','17',str(tmp))
         tmp.replace(master)
+    if masked:master=snow_master(folder,master,n,fade_frames)
     preview=folder/('preview-'+str(fade_frames)+'.mp4')
     if not preview.exists():
         tmp=preview.with_suffix('.partial.mp4')
@@ -95,6 +122,9 @@ def build(folder, fade_frames):
             'native_frames':n,'fade_frames':fade_frames,'master_frames':n-fade_frames,'seconds':30,
             'preview_sha256':hashlib.sha256(preview.read_bytes()).hexdigest(),'master_sha256':hashlib.sha256(master.read_bytes()).hexdigest(),
             'audio_note':'Approved fireplace reference checked by correlation, no claim of human listening'}
+    report['window_snow_overlay']=masked
+    report['fireplace_masks']=False
+    if masked:report['window_mask_sha256']=hashlib.sha256((folder/'mask.png').read_bytes()).hexdigest()
     (folder/('technical-'+str(fade_frames)+'.json')).write_text(json.dumps(report))
     return report
 
@@ -164,10 +194,21 @@ def deliver(folder, cfg, fade):
 
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser();p.add_argument('action',choices=['normalize','build','source-sheet','preview-sheet','deliver']);p.add_argument('folder',type=Path);p.add_argument('--fade',type=int,default=6)
+    p=argparse.ArgumentParser();p.add_argument('action',choices=['normalize','build','window-frames','window-mask','source-sheet','preview-sheet','deliver']);p.add_argument('folder',type=Path);p.add_argument('--fade',type=int,default=6)
     a=p.parse_args();cfg=json.loads((a.folder/'config.json').read_text())
     if a.action=='normalize':print(json.dumps(normalize(a.folder)))
     elif a.action=='build':print(json.dumps(build(a.folder,a.fade)))
+    elif a.action=='window-frames':
+        for i,t in enumerate([0,1,5,9]):
+            run('ffmpeg','-nostdin','-v','error','-y','-threads','1','-ss',str(t),'-i',str(a.folder/'source.mp4'),
+                '-vf','scale=1280:720','-frames:v','1','-threads','1',str(a.folder/f'frame{i}.png'))
+    elif a.action=='window-mask':
+        from window_snow_contract import make_mask
+        from PIL import Image
+        mask=make_mask(json.loads((a.folder/'window-plan.json').read_text()));mask.save(a.folder/'mask.png')
+        frame=Image.open(a.folder/'frame0.png').convert('RGB')
+        tint=Image.blend(frame,Image.new('RGB',frame.size,'magenta'),.6)
+        Image.composite(tint,frame,mask).save(a.folder/'mask-overlay.png')
     elif a.action=='source-sheet':sheets(a.folder,a.folder/'source.mp4','source')
     elif a.action=='preview-sheet':
         sheets(a.folder,a.folder/f'preview-{a.fade}.mp4',f'preview-{a.fade}')
