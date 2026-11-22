@@ -1,0 +1,10 @@
+[Unit]
+Description=Resume persisted Mountain View preview work without a MacBook
+
+[Timer]
+OnBootSec=90
+OnUnitInactiveSec=60
+Unit=relax-mountain-batch.service
+
+[Install]
+WantedBy=timers.target
